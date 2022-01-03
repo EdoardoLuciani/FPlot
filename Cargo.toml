@@ -6,7 +6,10 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-ash = {version = "0.34.0", default-features = false, features = ["loaded", "debug"]}
+ash = "0.35.0"
 winit = "0.26.0"
 raw-window-handle = "0.4.2"
-gpu-allocator = "0.12.0"
+gpu-allocator = "0.14.0"
+
+[build-dependencies]
+shaderc = "0.7.3"

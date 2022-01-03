@@ -3,9 +3,9 @@ use std::borrow::Borrow;
 use std::collections::HashSet;
 use std::ffi::{CStr, CString};
 use std::slice;
-use gpu_allocator::vulkan::*;
 use super::pointer_chain_helpers::*;
 use super::vk_debug_callback;
+use gpu_allocator::{MemoryLocation, vulkan as vkalloc};
 
 use raw_window_handle::RawWindowHandle;
 
@@ -17,15 +17,29 @@ pub struct BaseVk {
     surface: vk::SurfaceKHR,
     surface_fn: Option<khr::Surface>,
     physical_device: vk::PhysicalDevice,
-    device: ash::Device,
-    swapchain_fn: Option<khr::Swapchain>,
-    swapchain: vk::SwapchainKHR,
+    pub device: ash::Device,
+    pub swapchain_fn: Option<khr::Swapchain>,
+    pub swapchain: vk::SwapchainKHR,
+    pub allocator: gpu_allocator::vulkan::Allocator
+}
+
+#[derive(Clone)]
+pub struct BufferAllocation {
+    pub buffer: vk::Buffer,
+    pub allocation: vkalloc::Allocation,
+}
+
+#[derive(Clone)]
+pub struct ImageAllocation {
+    pub image: vk::Image,
+    pub allocation: vkalloc::Allocation
 }
 
 /**
 BaseVk is struct that initializes a single Vulkan 1.1 instance and device with optional surface support.
-It supports instance creation with extensions and device selection with Vulkan 1.1 features, extensions
-and requested queues. Basically it is a bootstrap for a very common vulkan setup.
+It supports instance creation with extensions and device selection with Vulkan 1.1 features
+and requested queues. It also initializes an allocator that greatly simplifies Vulkan allocations.
+Basically it is a bootstrap for a very common vulkan setup.
 */
 impl BaseVk {
     pub fn new(
@@ -88,14 +102,11 @@ impl BaseVk {
             .enabled_layer_names(&layer_names)
             .enabled_extension_names(&instance_extensions_ptrs);
 
-        let entry_fn;
-        let instance;
-        unsafe {
-            entry_fn = ash::Entry::load().unwrap();
-            instance = entry_fn
-                .create_instance(&instance_create_info, None)
-                .expect("Could not create VkInstance");
-        }
+        let entry_fn= unsafe { ash::Entry::load().unwrap() };
+        let instance = unsafe {
+            entry_fn.create_instance(&instance_create_info, None)
+                .expect("Could not create VkInstance")
+        };
 
         // Creation of an optional debug reporter
         let mut debug_utils_fn = None;
@@ -123,9 +134,8 @@ impl BaseVk {
         }
 
         // Creating the surface based on os
-        let surface;
-        unsafe {
-            surface = match window_handle {
+        let surface= unsafe {
+            match window_handle {
                 Some(RawWindowHandle::Win32(handle)) => {
                     let surface_desc = vk::Win32SurfaceCreateInfoKHR::builder()
                         .hinstance(handle.hinstance)
@@ -153,8 +163,8 @@ impl BaseVk {
                 }
                 None => vk::SurfaceKHR::null(),
                 _ => panic!("Unsupported window handle")
-            };
-        }
+            }
+        };
 
         let mut desired_device_extensions: Vec<CString> = device_extensions
             .iter()
@@ -166,12 +176,10 @@ impl BaseVk {
             desired_device_extensions.push(CString::new("VK_KHR_swapchain").unwrap());
         }
 
-        let mut available_device_features;
         // Creating a new struct pointer chain to accommodate the features of the physical devices
-        unsafe {
-            available_device_features =
-                clone_vkPhysicalDeviceFeatures2_structure(desired_physical_device_features2);
-        }
+        let mut available_device_features = unsafe {
+            clone_vkPhysicalDeviceFeatures2_structure(desired_physical_device_features2)
+        };
 
         // Iterate for all physical devices and keep only those that respect our requirements
         let good_devices;
@@ -291,6 +299,14 @@ impl BaseVk {
             swapchain_fn = Some(khr::Swapchain::new(&instance, &device));
         }
 
+        let allocator = gpu_allocator::vulkan::Allocator::new(&gpu_allocator::vulkan::AllocatorCreateDesc {
+            instance: instance.clone(),
+            device: device.clone(),
+            physical_device: selected_device.0,
+            debug_settings: Default::default(),
+            buffer_device_address: true,  // Ideally, check the BufferDeviceAddressFeatures struct.
+        }).expect("Could not create Allocator");
+
         BaseVk {
             entry_fn,
             instance,
@@ -302,6 +318,7 @@ impl BaseVk {
             device,
             swapchain_fn,
             swapchain: vk::SwapchainKHR::null(),
+            allocator
         }
     }
 
@@ -406,6 +423,27 @@ impl BaseVk {
                 .create_swapchain(&swapchain_create_info, None)
                 .expect("Could not create swapchain");
         }
+    }
+
+    pub fn allocate_buffer(&mut self, buffer_create_info : &vk::BufferCreateInfo, memory_location: MemoryLocation) -> BufferAllocation  {
+        let buffer = unsafe { self.device.create_buffer(buffer_create_info, None) }.unwrap();
+        let requirements = unsafe { self.device.get_buffer_memory_requirements(buffer) };
+
+        let allocation = self.allocator
+            .allocate(&vkalloc::AllocationCreateDesc {
+                name: "",
+                requirements,
+                location: memory_location,
+                linear: true, // buffers are always linear
+            }).unwrap();
+
+        unsafe { self.device.bind_buffer_memory(buffer, allocation.memory(), allocation.offset()).unwrap() };
+        BufferAllocation{buffer, allocation}
+    }
+
+    pub fn destroy_buffer(&mut self, buffer: &BufferAllocation) {
+        self.allocator.free(buffer.allocation.clone()).unwrap();
+        unsafe { self.device.destroy_buffer(buffer.buffer, None) };
     }
 }
 
