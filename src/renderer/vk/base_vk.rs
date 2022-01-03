@@ -19,6 +19,7 @@ pub struct BaseVk {
     physical_device: vk::PhysicalDevice,
     pub device: ash::Device,
     pub swapchain_fn: Option<khr::Swapchain>,
+    pub swapchain_create_info: Option<vk::SwapchainCreateInfoKHR>,
     pub swapchain: vk::SwapchainKHR,
     pub allocator: gpu_allocator::vulkan::Allocator
 }
@@ -317,6 +318,7 @@ impl BaseVk {
             physical_device: selected_device.0,
             device,
             swapchain_fn,
+            swapchain_create_info: None,
             swapchain: vk::SwapchainKHR::null(),
             allocator
         }
@@ -329,16 +331,17 @@ impl BaseVk {
         usage_flags: vk::ImageUsageFlags,
         surface_format: vk::SurfaceFormatKHR,
     ) {
-        let mut swapchain_create_info = vk::SwapchainCreateInfoKHR::builder()
+        self.swapchain_create_info = Some(vk::SwapchainCreateInfoKHR::builder()
             .surface(self.surface)
             .pre_transform(vk::SurfaceTransformFlagsKHR::IDENTITY)
             .composite_alpha(vk::CompositeAlphaFlagsKHR::OPAQUE)
             .clipped(true)
-            .old_swapchain(self.swapchain);
+            .old_swapchain(self.swapchain)
+            .build());
         let surface_capabilities;
         unsafe {
             // getting the present mode for the swapchain
-            swapchain_create_info.present_mode = *self
+            self.swapchain_create_info.unwrap().present_mode = *self
                 .surface_fn
                 .as_ref()
                 .expect("BaseVk has not been created with surface support")
@@ -358,10 +361,10 @@ impl BaseVk {
         }
 
         // getting the image count for the swapchain
-        swapchain_create_info.min_image_count = surface_capabilities.min_image_count + 1;
+        self.swapchain_create_info.unwrap().min_image_count = surface_capabilities.min_image_count + 1;
         if surface_capabilities.max_image_count != 0 {
-            swapchain_create_info.min_image_count = std::cmp::min(
-                swapchain_create_info.min_image_count,
+            self.swapchain_create_info.unwrap().min_image_count = std::cmp::min(
+                self.swapchain_create_info.unwrap().min_image_count,
                 surface_capabilities.max_image_count,
             );
         }
@@ -370,25 +373,25 @@ impl BaseVk {
         if surface_capabilities.current_extent.width == 0xFFFFFFFF
             && surface_capabilities.current_extent.height == 0xFFFFFFFF
         {
-            swapchain_create_info.image_extent.width = std::cmp::max(
+            self.swapchain_create_info.unwrap().image_extent.width = std::cmp::max(
                 window_size.width,
                 surface_capabilities.min_image_extent.width,
             );
-            swapchain_create_info.image_extent.width = std::cmp::min(
-                swapchain_create_info.image_extent.width,
+            self.swapchain_create_info.unwrap().image_extent.width = std::cmp::min(
+                self.swapchain_create_info.unwrap().image_extent.width,
                 surface_capabilities.max_image_extent.width,
             );
 
-            swapchain_create_info.image_extent.height = std::cmp::max(
+            self.swapchain_create_info.unwrap().image_extent.height = std::cmp::max(
                 window_size.height,
                 surface_capabilities.min_image_extent.height,
             );
-            swapchain_create_info.image_extent.height = std::cmp::min(
-                swapchain_create_info.image_extent.height,
+            self.swapchain_create_info.unwrap().image_extent.height = std::cmp::min(
+                self.swapchain_create_info.unwrap().image_extent.height,
                 surface_capabilities.max_image_extent.height,
             );
         } else {
-            swapchain_create_info.image_extent = surface_capabilities.current_extent;
+            self.swapchain_create_info.unwrap().image_extent = surface_capabilities.current_extent;
         }
 
         // checking if the usage flags are supported
@@ -398,7 +401,7 @@ impl BaseVk {
         {
             panic!("Unsupported image usage flags")
         }
-        swapchain_create_info.image_usage = usage_flags;
+        self.swapchain_create_info.unwrap().image_usage = usage_flags;
 
         // checking if the surface format is supported or a substitute needs to be selected
         unsafe {
@@ -414,13 +417,13 @@ impl BaseVk {
                 .find(|e| **e == surface_format)
                 .unwrap_or_else(|| supported_formats.first().unwrap());
 
-            swapchain_create_info.image_format = chosen_format.format;
-            swapchain_create_info.image_color_space = chosen_format.color_space;
+            self.swapchain_create_info.unwrap().image_format = chosen_format.format;
+            self.swapchain_create_info.unwrap().image_color_space = chosen_format.color_space;
             self.swapchain = self
                 .swapchain_fn
                 .as_ref()
                 .unwrap()
-                .create_swapchain(&swapchain_create_info, None)
+                .create_swapchain(&self.swapchain_create_info.unwrap(), None)
                 .expect("Could not create swapchain");
         }
     }
