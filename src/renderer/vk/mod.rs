@@ -1,6 +1,6 @@
-mod pointer_chain_helpers;
 mod base_vk;
 pub mod graph_vk;
+mod pointer_chain_helpers;
 
 use ash::vk;
 use std::fmt::Write;
@@ -32,13 +32,23 @@ unsafe extern "system" fn vk_debug_callback(
     vk::FALSE
 }
 
-fn get_binary_shader_data<T: AsRef<Path>>(path: T) -> (Vec<u8>, vk::ShaderStageFlags, vk::ShaderModuleCreateInfo) {
-    let shader_type_extension = path.as_ref().file_stem().unwrap().to_str().unwrap().rsplit_once('.').expect("No shader type extension found").1;
+fn get_binary_shader_data<T: AsRef<Path>>(
+    path: T,
+) -> (Vec<u8>, vk::ShaderStageFlags, vk::ShaderModuleCreateInfo) {
+    let shader_type_extension = path
+        .as_ref()
+        .file_stem()
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .rsplit_once('.')
+        .expect("No shader type extension found")
+        .1;
     let shader_type = match shader_type_extension {
         "vert" => vk::ShaderStageFlags::VERTEX,
         "frag" => vk::ShaderStageFlags::FRAGMENT,
         "comp" => vk::ShaderStageFlags::COMPUTE,
-        _ => panic!("Shader type could not be deducted")
+        _ => panic!("Shader type could not be deducted"),
     };
     let mut file = File::open(path).expect("Could not open shader");
     let mut data = Vec::<u8>::new();

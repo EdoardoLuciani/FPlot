@@ -1,13 +1,14 @@
+use super::pointer_chain_helpers::*;
+use super::vk_debug_callback;
 use ash::{extensions::*, vk};
+use gpu_allocator::{vulkan as vkalloc, MemoryLocation};
 use std::borrow::Borrow;
 use std::collections::HashSet;
 use std::ffi::{CStr, CString};
 use std::mem::ManuallyDrop;
-use super::pointer_chain_helpers::*;
-use super::vk_debug_callback;
-use gpu_allocator::{MemoryLocation, vulkan as vkalloc};
 
 use raw_window_handle::RawWindowHandle;
+use winit::event::VirtualKeyCode::Comma;
 
 pub struct BaseVk {
     entry_fn: ash::Entry,
@@ -17,12 +18,13 @@ pub struct BaseVk {
     surface: vk::SurfaceKHR,
     surface_fn: Option<khr::Surface>,
     physical_device: vk::PhysicalDevice,
+    queue_family_index: u32,
     pub device: ash::Device,
     pub swapchain_fn: Option<khr::Swapchain>,
     pub swapchain_create_info: Option<vk::SwapchainCreateInfoKHR>,
     pub swapchain: vk::SwapchainKHR,
     pub swapchain_image_views: Option<Vec<vk::ImageView>>,
-    pub allocator: ManuallyDrop<gpu_allocator::vulkan::Allocator>
+    pub allocator: ManuallyDrop<gpu_allocator::vulkan::Allocator>,
 }
 
 #[derive(Clone)]
@@ -34,7 +36,13 @@ pub struct BufferAllocation {
 #[derive(Clone)]
 pub struct ImageAllocation {
     pub image: vk::Image,
-    pub allocation: vkalloc::Allocation
+    pub allocation: vkalloc::Allocation,
+}
+
+#[derive(Clone)]
+pub struct CommandRecordInfo {
+    pub pool: vk::CommandPool,
+    pub buffers: Vec<vk::CommandBuffer>,
 }
 
 /**
@@ -104,9 +112,10 @@ impl BaseVk {
             .enabled_layer_names(&layer_names)
             .enabled_extension_names(&instance_extensions_ptrs);
 
-        let entry_fn= unsafe { ash::Entry::load().unwrap() };
+        let entry_fn = unsafe { ash::Entry::load().unwrap() };
         let instance = unsafe {
-            entry_fn.create_instance(&instance_create_info, None)
+            entry_fn
+                .create_instance(&instance_create_info, None)
                 .expect("Could not create VkInstance")
         };
 
@@ -136,7 +145,7 @@ impl BaseVk {
         }
 
         // Creating the surface based on os
-        let surface= unsafe {
+        let surface = unsafe {
             match window_handle {
                 Some(RawWindowHandle::Win32(handle)) => {
                     let surface_desc = vk::Win32SurfaceCreateInfoKHR::builder()
@@ -152,7 +161,9 @@ impl BaseVk {
                         .dpy(handle.display as *mut _)
                         .window(handle.window);
                     let xlib_surface_fn = khr::XlibSurface::new(&entry_fn, &instance);
-                    xlib_surface_fn.create_xlib_surface(&surface_desc, None).unwrap()
+                    xlib_surface_fn
+                        .create_xlib_surface(&surface_desc, None)
+                        .unwrap()
                 }
                 Some(RawWindowHandle::Wayland(handle)) => {
                     let surface_desc = vk::WaylandSurfaceCreateInfoKHR::builder()
@@ -164,7 +175,7 @@ impl BaseVk {
                         .unwrap()
                 }
                 None => vk::SurfaceKHR::null(),
-                _ => panic!("Unsupported window handle")
+                _ => panic!("Unsupported window handle"),
             }
         };
 
@@ -241,20 +252,20 @@ impl BaseVk {
                                 });
                                 is_family_queue_good = is_family_queue_good
                                     && desired_queues.len()
-                                    <= queue_family.queue_family_properties.queue_count
-                                    as usize;
+                                        <= queue_family.queue_family_properties.queue_count
+                                            as usize;
 
                                 if surface != vk::SurfaceKHR::null() {
                                     is_family_queue_good = is_family_queue_good
                                         && surface_fn
-                                        .as_ref()
-                                        .unwrap()
-                                        .get_physical_device_surface_support(
-                                            *physical_device,
-                                            *i as u32,
-                                            surface,
-                                        )
-                                        .unwrap();
+                                            .as_ref()
+                                            .unwrap()
+                                            .get_physical_device_surface_support(
+                                                *physical_device,
+                                                *i as u32,
+                                                surface,
+                                            )
+                                            .unwrap();
                                 }
                                 is_family_queue_good
                             });
@@ -302,13 +313,15 @@ impl BaseVk {
             swapchain_fn = Some(khr::Swapchain::new(&instance, &device));
         }
 
-        let allocator = gpu_allocator::vulkan::Allocator::new(&gpu_allocator::vulkan::AllocatorCreateDesc {
-            instance: instance.clone(),
-            device: device.clone(),
-            physical_device: selected_device.0,
-            debug_settings: Default::default(),
-            buffer_device_address: false,
-        }).expect("Could not create Allocator");
+        let allocator =
+            gpu_allocator::vulkan::Allocator::new(&gpu_allocator::vulkan::AllocatorCreateDesc {
+                instance: instance.clone(),
+                device: device.clone(),
+                physical_device: selected_device.0,
+                debug_settings: Default::default(),
+                buffer_device_address: false,
+            })
+            .expect("Could not create Allocator");
 
         BaseVk {
             entry_fn,
@@ -318,12 +331,13 @@ impl BaseVk {
             surface,
             surface_fn,
             physical_device: selected_device.0,
+            queue_family_index: selected_device.1,
             device,
             swapchain_fn,
             swapchain_create_info: None,
             swapchain: vk::SwapchainKHR::null(),
             swapchain_image_views: None,
-            allocator: ManuallyDrop::new(allocator)
+            allocator: ManuallyDrop::new(allocator),
         }
     }
 
@@ -334,14 +348,16 @@ impl BaseVk {
         usage_flags: vk::ImageUsageFlags,
         surface_format: vk::SurfaceFormatKHR,
     ) {
-        self.swapchain_create_info = Some(vk::SwapchainCreateInfoKHR::builder()
-            .image_array_layers(1)
-            .surface(self.surface)
-            .pre_transform(vk::SurfaceTransformFlagsKHR::IDENTITY)
-            .composite_alpha(vk::CompositeAlphaFlagsKHR::OPAQUE)
-            .clipped(true)
-            .old_swapchain(self.swapchain)
-            .build());
+        self.swapchain_create_info = Some(
+            vk::SwapchainCreateInfoKHR::builder()
+                .image_array_layers(1)
+                .surface(self.surface)
+                .pre_transform(vk::SurfaceTransformFlagsKHR::IDENTITY)
+                .composite_alpha(vk::CompositeAlphaFlagsKHR::OPAQUE)
+                .clipped(true)
+                .old_swapchain(self.swapchain)
+                .build(),
+        );
         let swapchain_create_info_ref = self.swapchain_create_info.as_mut().unwrap();
         let surface_capabilities;
         unsafe {
@@ -427,44 +443,99 @@ impl BaseVk {
                 .expect("Could not create swapchain");
 
             self.swapchain_image_views = Some(Vec::new());
-            let swapchain_images = self.swapchain_fn.as_ref().unwrap().get_swapchain_images(self.swapchain).unwrap();
+            let swapchain_images = self
+                .swapchain_fn
+                .as_ref()
+                .unwrap()
+                .get_swapchain_images(self.swapchain)
+                .unwrap();
             for swapchain_image in swapchain_images.iter() {
                 let image_view_create_info = vk::ImageViewCreateInfo::builder()
                     .image(*swapchain_image)
                     .view_type(vk::ImageViewType::TYPE_2D)
                     .format(self.swapchain_create_info.unwrap().image_format)
                     .components(vk::ComponentMapping::default())
-                    .subresource_range(vk::ImageSubresourceRange::builder()
-                        .aspect_mask(vk::ImageAspectFlags::COLOR)
-                        .base_mip_level(0)
-                        .level_count(1)
-                        .base_array_layer(0)
-                        .layer_count(1)
-                        .build());
-                self.swapchain_image_views.as_mut().unwrap().push(self.device.create_image_view(&image_view_create_info, None).unwrap());
+                    .subresource_range(
+                        vk::ImageSubresourceRange::builder()
+                            .aspect_mask(vk::ImageAspectFlags::COLOR)
+                            .base_mip_level(0)
+                            .level_count(1)
+                            .base_array_layer(0)
+                            .layer_count(1)
+                            .build(),
+                    );
+                self.swapchain_image_views.as_mut().unwrap().push(
+                    self.device
+                        .create_image_view(&image_view_create_info, None)
+                        .unwrap(),
+                );
             }
         }
     }
 
-    pub fn allocate_buffer(&mut self, buffer_create_info : &vk::BufferCreateInfo, memory_location: MemoryLocation) -> BufferAllocation  {
+    pub fn allocate_buffer(
+        &mut self,
+        buffer_create_info: &vk::BufferCreateInfo,
+        memory_location: MemoryLocation,
+    ) -> BufferAllocation {
         let buffer = unsafe { self.device.create_buffer(buffer_create_info, None) }.unwrap();
         let requirements = unsafe { self.device.get_buffer_memory_requirements(buffer) };
 
-        let allocation = self.allocator
+        let allocation = self
+            .allocator
             .allocate(&vkalloc::AllocationCreateDesc {
                 name: "",
                 requirements,
                 location: memory_location,
                 linear: true, // buffers are always linear
-            }).unwrap();
+            })
+            .unwrap();
 
-        unsafe { self.device.bind_buffer_memory(buffer, allocation.memory(), allocation.offset()).unwrap() };
-        BufferAllocation{buffer, allocation}
+        unsafe {
+            self.device
+                .bind_buffer_memory(buffer, allocation.memory(), allocation.offset())
+                .unwrap()
+        };
+        BufferAllocation { buffer, allocation }
     }
 
     pub fn destroy_buffer(&mut self, buffer: &BufferAllocation) {
         self.allocator.free(buffer.allocation.clone()).unwrap();
         unsafe { self.device.destroy_buffer(buffer.buffer, None) };
+    }
+
+    pub fn create_cmd_pool_and_buffers(
+        &mut self,
+        pool_flags: vk::CommandPoolCreateFlags,
+        cmdb_level: vk::CommandBufferLevel,
+        cmdb_count: u32,
+    ) -> CommandRecordInfo {
+        let command_pool_create_info = vk::CommandPoolCreateInfo::builder()
+            .flags(pool_flags)
+            .queue_family_index(self.queue_family_index);
+        let pool = unsafe {
+            self.device
+                .create_command_pool(&command_pool_create_info, None)
+                .unwrap()
+        };
+
+        let command_buffers_allocate_info = vk::CommandBufferAllocateInfo::builder()
+            .command_pool(pool)
+            .level(cmdb_level)
+            .command_buffer_count(cmdb_count);
+        let buffers = unsafe {
+            self.device
+                .allocate_command_buffers(&command_buffers_allocate_info)
+                .unwrap()
+        };
+        CommandRecordInfo { pool, buffers }
+    }
+
+    pub fn destroy_cmd_pool_and_buffers(&mut self, cmri: CommandRecordInfo) {
+        unsafe {
+            self.device.free_command_buffers(cmri.pool, &cmri.buffers);
+            self.device.destroy_command_pool(cmri.pool, None);
+        }
     }
 }
 

@@ -1,17 +1,18 @@
-use std::ffi::CStr;
-use ash::{extensions::*, vk};
-use super::base_vk::*;
 use super::super::window_manager::WindowManager;
+use super::base_vk::*;
+use ash::{extensions::*, vk};
+use std::ffi::CStr;
 
 pub struct GraphVk {
     bvk: BaseVk,
     window: WindowManager,
     host_curve_buffer: BufferAllocation,
     device_curve_buffer: BufferAllocation,
+    main_command: CommandRecordInfo,
     renderpass: vk::RenderPass,
     pipeline_layout: vk::PipelineLayout,
     pipeline: vk::Pipeline,
-    framebuffers: Vec<vk::Framebuffer>
+    framebuffers: Vec<vk::Framebuffer>,
 }
 
 impl GraphVk {
@@ -39,11 +40,33 @@ impl GraphVk {
                 color_space: vk::ColorSpaceKHR::SRGB_NONLINEAR,
             },
         );
-        let buffers = Self::create_curve_vertex_buffers(&mut base_vk, (window_size.0 as usize * 2 * std::mem::size_of::<f32>()) as u64);
+        let buffers = Self::create_curve_vertex_buffers(
+            &mut base_vk,
+            (window_size.0 as usize * 2 * std::mem::size_of::<f32>()) as u64,
+        );
         let renderpass = Self::create_renderpass(&mut base_vk);
-        let pipeline_data = Self::create_graph_pipeline(&mut base_vk, std::path::Path::new("assets/shaders-spirv"), renderpass);
+        let pipeline_data = Self::create_graph_pipeline(
+            &mut base_vk,
+            std::path::Path::new("assets/shaders-spirv"),
+            renderpass,
+        );
         let framebuffers = Self::create_framebuffers(&mut base_vk, renderpass);
-        GraphVk{bvk: base_vk, window, host_curve_buffer: buffers[0].clone(), device_curve_buffer: buffers[1].clone(), renderpass, pipeline_layout: pipeline_data.0, pipeline: pipeline_data.1, framebuffers}
+        let main_command = base_vk.create_cmd_pool_and_buffers(
+            vk::CommandPoolCreateFlags::empty(),
+            vk::CommandBufferLevel::PRIMARY,
+            base_vk.swapchain_create_info.unwrap().min_image_count,
+        );
+        GraphVk {
+            bvk: base_vk,
+            window,
+            host_curve_buffer: buffers[0].clone(),
+            device_curve_buffer: buffers[1].clone(),
+            main_command,
+            renderpass,
+            pipeline_layout: pipeline_data.0,
+            pipeline: pipeline_data.1,
+            framebuffers,
+        }
     }
 
     fn create_curve_vertex_buffers(bvk: &mut BaseVk, size: u64) -> [BufferAllocation; 2] {
@@ -52,10 +75,13 @@ impl GraphVk {
             .usage(vk::BufferUsageFlags::TRANSFER_SRC)
             .sharing_mode(vk::SharingMode::EXCLUSIVE)
             .build();
-        let host_buffer = bvk.allocate_buffer(&buffer_create_info, gpu_allocator::MemoryLocation::GpuToCpu);
+        let host_buffer =
+            bvk.allocate_buffer(&buffer_create_info, gpu_allocator::MemoryLocation::GpuToCpu);
 
-        buffer_create_info.usage = vk::BufferUsageFlags::VERTEX_BUFFER | vk::BufferUsageFlags::TRANSFER_DST;
-        let device_buffer = bvk.allocate_buffer(&buffer_create_info, gpu_allocator::MemoryLocation::GpuOnly);
+        buffer_create_info.usage =
+            vk::BufferUsageFlags::VERTEX_BUFFER | vk::BufferUsageFlags::TRANSFER_DST;
+        let device_buffer =
+            bvk.allocate_buffer(&buffer_create_info, gpu_allocator::MemoryLocation::GpuOnly);
         [host_buffer, device_buffer]
     }
 
@@ -90,22 +116,32 @@ impl GraphVk {
             .attachments(std::slice::from_ref(&attachment_descriptions))
             .subpasses(std::slice::from_ref(&subpass_description));
         let renderpass = unsafe {
-            bvk.device.create_render_pass(&renderpass_create_info, None).unwrap()
+            bvk.device
+                .create_render_pass(&renderpass_create_info, None)
+                .unwrap()
         };
         renderpass
     }
 
-    fn create_graph_pipeline(bvk: &mut BaseVk, shader_dir: &std::path::Path, renderpass: vk::RenderPass) -> (vk::PipelineLayout, vk::Pipeline) {
+    fn create_graph_pipeline(
+        bvk: &mut BaseVk,
+        shader_dir: &std::path::Path,
+        renderpass: vk::RenderPass,
+    ) -> (vk::PipelineLayout, vk::Pipeline) {
         // Creating the shader modules
         let vertex_shader = super::get_binary_shader_data(shader_dir.join("vertex.vert.spirv"));
         let vertex_shader_module = unsafe {
-            bvk.device.create_shader_module(&vertex_shader.2, None).unwrap()
+            bvk.device
+                .create_shader_module(&vertex_shader.2, None)
+                .unwrap()
         };
         let fragment_shader = super::get_binary_shader_data(shader_dir.join("fragment.frag.spirv"));
         let fragment_shader_module = unsafe {
-            bvk.device.create_shader_module(&fragment_shader.2, None).unwrap()
+            bvk.device
+                .create_shader_module(&fragment_shader.2, None)
+                .unwrap()
         };
-        let shader_entry_point_name = unsafe {CStr::from_bytes_with_nul_unchecked(b"main\0")};
+        let shader_entry_point_name = unsafe { CStr::from_bytes_with_nul_unchecked(b"main\0") };
         let pipeline_shader_stage_create_infos: [vk::PipelineShaderStageCreateInfo; 2] = [
             vk::PipelineShaderStageCreateInfo::builder()
                 .stage(vertex_shader.1)
@@ -122,23 +158,24 @@ impl GraphVk {
         // Vertex state definition
         let vertex_input_binding = vk::VertexInputBindingDescription::builder()
             .binding(0)
-            .stride(2*std::mem::size_of::<f32>() as u32)
+            .stride(2 * std::mem::size_of::<f32>() as u32)
             .input_rate(vk::VertexInputRate::VERTEX);
-        let vertex_input_attribute: [vk::VertexInputAttributeDescription ;1] = [
-            vk::VertexInputAttributeDescription::builder()
+        let vertex_input_attribute: [vk::VertexInputAttributeDescription; 1] =
+            [vk::VertexInputAttributeDescription::builder()
                 .location(0)
                 .binding(0)
                 .format(vk::Format::R32G32_SFLOAT)
                 .offset(0)
-                .build()
-        ];
-        let pipeline_vertex_input_state_create_info = vk::PipelineVertexInputStateCreateInfo::builder()
-            .vertex_binding_descriptions(std::slice::from_ref(&vertex_input_binding))
-            .vertex_attribute_descriptions(&vertex_input_attribute);
+                .build()];
+        let pipeline_vertex_input_state_create_info =
+            vk::PipelineVertexInputStateCreateInfo::builder()
+                .vertex_binding_descriptions(std::slice::from_ref(&vertex_input_binding))
+                .vertex_attribute_descriptions(&vertex_input_attribute);
 
-        let pipeline_input_assembly_create_info = vk::PipelineInputAssemblyStateCreateInfo::builder()
-            .topology(vk::PrimitiveTopology::TRIANGLE_LIST)
-            .primitive_restart_enable(false);
+        let pipeline_input_assembly_create_info =
+            vk::PipelineInputAssemblyStateCreateInfo::builder()
+                .topology(vk::PrimitiveTopology::TRIANGLE_LIST)
+                .primitive_restart_enable(false);
 
         // Dummy values for viewport and scissor since they will be set using dynamic states
         let viewport = vk::Viewport::builder()
@@ -150,39 +187,47 @@ impl GraphVk {
             .max_depth(1.0f32)
             .build();
         let scissor = vk::Rect2D::builder()
-            .offset(vk::Offset2D{x: 0, y: 0})
-            .extent(vk::Extent2D{width: 64, height: 64})
+            .offset(vk::Offset2D { x: 0, y: 0 })
+            .extent(vk::Extent2D {
+                width: 64,
+                height: 64,
+            })
             .build();
         let pipeline_viewport_state_create_info = vk::PipelineViewportStateCreateInfo::builder()
             .viewports(std::slice::from_ref(&viewport))
             .scissors(std::slice::from_ref(&scissor));
 
-        let pipeline_rasterization_state_create_info = vk::PipelineRasterizationStateCreateInfo::builder()
-            .depth_clamp_enable(false)
-            .rasterizer_discard_enable(false)
-            .polygon_mode(vk::PolygonMode::POINT)
-            .cull_mode(vk::CullModeFlags::NONE)
-            .front_face(vk::FrontFace::COUNTER_CLOCKWISE)
-            .depth_bias_enable(false)
-            .line_width(1.0f32);
+        let pipeline_rasterization_state_create_info =
+            vk::PipelineRasterizationStateCreateInfo::builder()
+                .depth_clamp_enable(false)
+                .rasterizer_discard_enable(false)
+                .polygon_mode(vk::PolygonMode::POINT)
+                .cull_mode(vk::CullModeFlags::NONE)
+                .front_face(vk::FrontFace::COUNTER_CLOCKWISE)
+                .depth_bias_enable(false)
+                .line_width(1.0f32);
 
-        let pipeline_multisample_state_create_info = vk::PipelineMultisampleStateCreateInfo::builder()
-            .rasterization_samples(vk::SampleCountFlags::TYPE_1);
+        let pipeline_multisample_state_create_info =
+            vk::PipelineMultisampleStateCreateInfo::builder()
+                .rasterization_samples(vk::SampleCountFlags::TYPE_1);
 
         let color_blend_attachment_state = vk::PipelineColorBlendAttachmentState::builder()
             .blend_enable(false)
             .build();
-        let pipeline_color_blend_state_create_info = vk::PipelineColorBlendStateCreateInfo::builder()
-            .logic_op_enable(false)
-            .attachments(std::slice::from_ref(&color_blend_attachment_state));
+        let pipeline_color_blend_state_create_info =
+            vk::PipelineColorBlendStateCreateInfo::builder()
+                .logic_op_enable(false)
+                .attachments(std::slice::from_ref(&color_blend_attachment_state));
 
         let dynamic_states = [vk::DynamicState::VIEWPORT, vk::DynamicState::SCISSOR];
-        let pipeline_dynamic_state_create_info = vk::PipelineDynamicStateCreateInfo::builder()
-            .dynamic_states(&dynamic_states);
+        let pipeline_dynamic_state_create_info =
+            vk::PipelineDynamicStateCreateInfo::builder().dynamic_states(&dynamic_states);
 
         let pipeline_layout_create_info = vk::PipelineLayoutCreateInfo::default();
         let pipeline_layout = unsafe {
-            bvk.device.create_pipeline_layout(&pipeline_layout_create_info, None).unwrap()
+            bvk.device
+                .create_pipeline_layout(&pipeline_layout_create_info, None)
+                .unwrap()
         };
 
         let graphics_pipeline_create_info = vk::GraphicsPipelineCreateInfo::builder()
@@ -199,12 +244,19 @@ impl GraphVk {
             .subpass(0);
 
         let pipeline = unsafe {
-            bvk.device.create_graphics_pipelines(vk::PipelineCache::null(), std::slice::from_ref(&graphics_pipeline_create_info), None).unwrap()
+            bvk.device
+                .create_graphics_pipelines(
+                    vk::PipelineCache::null(),
+                    std::slice::from_ref(&graphics_pipeline_create_info),
+                    None,
+                )
+                .unwrap()
         };
 
         unsafe {
             bvk.device.destroy_shader_module(vertex_shader_module, None);
-            bvk.device.destroy_shader_module(fragment_shader_module, None);
+            bvk.device
+                .destroy_shader_module(fragment_shader_module, None);
         }
         (pipeline_layout, pipeline[0])
     }
@@ -219,13 +271,15 @@ impl GraphVk {
                 .height(bvk.swapchain_create_info.unwrap().image_extent.height)
                 .layers(1);
             out_vec.push(unsafe {
-                bvk.device.create_framebuffer(&framebuffer_create_info, None).unwrap()
+                bvk.device
+                    .create_framebuffer(&framebuffer_create_info, None)
+                    .unwrap()
             });
         }
         out_vec
     }
 
-
+    fn record_static_command_buffers(&mut self) {}
 }
 
 impl Drop for GraphVk {
@@ -239,7 +293,9 @@ impl Drop for GraphVk {
             }
         }
         unsafe {
-            self.bvk.device.destroy_pipeline_layout(self.pipeline_layout, None);
+            self.bvk
+                .device
+                .destroy_pipeline_layout(self.pipeline_layout, None);
             self.bvk.device.destroy_pipeline(self.pipeline, None);
             self.bvk.device.destroy_render_pass(self.renderpass, None);
         }
