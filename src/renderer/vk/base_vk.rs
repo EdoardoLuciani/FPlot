@@ -2,7 +2,7 @@ use ash::{extensions::*, vk};
 use std::borrow::Borrow;
 use std::collections::HashSet;
 use std::ffi::{CStr, CString};
-use std::slice;
+use std::mem::ManuallyDrop;
 use super::pointer_chain_helpers::*;
 use super::vk_debug_callback;
 use gpu_allocator::{MemoryLocation, vulkan as vkalloc};
@@ -21,7 +21,8 @@ pub struct BaseVk {
     pub swapchain_fn: Option<khr::Swapchain>,
     pub swapchain_create_info: Option<vk::SwapchainCreateInfoKHR>,
     pub swapchain: vk::SwapchainKHR,
-    pub allocator: gpu_allocator::vulkan::Allocator
+    pub swapchain_image_views: Option<Vec<vk::ImageView>>,
+    pub allocator: ManuallyDrop<gpu_allocator::vulkan::Allocator>
 }
 
 #[derive(Clone)]
@@ -179,7 +180,7 @@ impl BaseVk {
 
         // Creating a new struct pointer chain to accommodate the features of the physical devices
         let mut available_device_features = unsafe {
-            clone_vkPhysicalDeviceFeatures2_structure(desired_physical_device_features2)
+            clone_vk_physical_device_features2_structure(desired_physical_device_features2)
         };
 
         // Iterate for all physical devices and keep only those that respect our requirements
@@ -210,7 +211,7 @@ impl BaseVk {
                         *physical_device,
                         &mut available_device_features,
                     );
-                    if !compare_vkPhysicalDeviceFeatures2(
+                    if !compare_vk_physical_device_features2(
                         &available_device_features,
                         desired_physical_device_features2,
                     ) {
@@ -264,7 +265,7 @@ impl BaseVk {
                     None
                 })
                 .collect::<Vec<(vk::PhysicalDevice, u32)>>();
-            destroy_vkPhysicalDeviceFeatures2(&mut available_device_features);
+            destroy_vk_physical_device_features2(&mut available_device_features);
         }
 
         if good_devices.len() > 1 {
@@ -276,16 +277,17 @@ impl BaseVk {
         // Device creation
         let device;
         unsafe {
+            let queue_priorities = desired_queues.iter().map(|q| q.1).collect::<Vec<f32>>();
             let queues_create_info = vk::DeviceQueueCreateInfo::builder()
                 .queue_family_index(selected_device.1)
-                .queue_priorities(&(desired_queues.iter().map(|q| q.1).collect::<Vec<f32>>()))
+                .queue_priorities(&queue_priorities)
                 .build();
             let device_extensions_ptrs = desired_device_extensions
                 .iter()
                 .map(|s| s.as_ptr())
                 .collect::<Vec<_>>();
             let mut device_create_info = vk::DeviceCreateInfo::builder()
-                .queue_create_infos(slice::from_ref(&queues_create_info))
+                .queue_create_infos(std::slice::from_ref(&queues_create_info))
                 .enabled_extension_names(&device_extensions_ptrs)
                 .enabled_features(&desired_physical_device_features2.features);
             device_create_info.p_next = desired_physical_device_features2.p_next;
@@ -305,7 +307,7 @@ impl BaseVk {
             device: device.clone(),
             physical_device: selected_device.0,
             debug_settings: Default::default(),
-            buffer_device_address: true,  // Ideally, check the BufferDeviceAddressFeatures struct.
+            buffer_device_address: false,
         }).expect("Could not create Allocator");
 
         BaseVk {
@@ -320,7 +322,8 @@ impl BaseVk {
             swapchain_fn,
             swapchain_create_info: None,
             swapchain: vk::SwapchainKHR::null(),
-            allocator
+            swapchain_image_views: None,
+            allocator: ManuallyDrop::new(allocator)
         }
     }
 
@@ -332,16 +335,18 @@ impl BaseVk {
         surface_format: vk::SurfaceFormatKHR,
     ) {
         self.swapchain_create_info = Some(vk::SwapchainCreateInfoKHR::builder()
+            .image_array_layers(1)
             .surface(self.surface)
             .pre_transform(vk::SurfaceTransformFlagsKHR::IDENTITY)
             .composite_alpha(vk::CompositeAlphaFlagsKHR::OPAQUE)
             .clipped(true)
             .old_swapchain(self.swapchain)
             .build());
+        let swapchain_create_info_ref = self.swapchain_create_info.as_mut().unwrap();
         let surface_capabilities;
         unsafe {
             // getting the present mode for the swapchain
-            self.swapchain_create_info.unwrap().present_mode = *self
+            swapchain_create_info_ref.present_mode = *self
                 .surface_fn
                 .as_ref()
                 .expect("BaseVk has not been created with surface support")
@@ -361,10 +366,10 @@ impl BaseVk {
         }
 
         // getting the image count for the swapchain
-        self.swapchain_create_info.unwrap().min_image_count = surface_capabilities.min_image_count + 1;
+        swapchain_create_info_ref.min_image_count = surface_capabilities.min_image_count + 1;
         if surface_capabilities.max_image_count != 0 {
-            self.swapchain_create_info.unwrap().min_image_count = std::cmp::min(
-                self.swapchain_create_info.unwrap().min_image_count,
+            swapchain_create_info_ref.min_image_count = std::cmp::min(
+                swapchain_create_info_ref.min_image_count,
                 surface_capabilities.max_image_count,
             );
         }
@@ -373,25 +378,19 @@ impl BaseVk {
         if surface_capabilities.current_extent.width == 0xFFFFFFFF
             && surface_capabilities.current_extent.height == 0xFFFFFFFF
         {
-            self.swapchain_create_info.unwrap().image_extent.width = std::cmp::max(
+            swapchain_create_info_ref.image_extent.width = num::clamp(
                 window_size.width,
                 surface_capabilities.min_image_extent.width,
-            );
-            self.swapchain_create_info.unwrap().image_extent.width = std::cmp::min(
-                self.swapchain_create_info.unwrap().image_extent.width,
                 surface_capabilities.max_image_extent.width,
             );
 
-            self.swapchain_create_info.unwrap().image_extent.height = std::cmp::max(
+            swapchain_create_info_ref.image_extent.height = num::clamp(
                 window_size.height,
                 surface_capabilities.min_image_extent.height,
-            );
-            self.swapchain_create_info.unwrap().image_extent.height = std::cmp::min(
-                self.swapchain_create_info.unwrap().image_extent.height,
                 surface_capabilities.max_image_extent.height,
             );
         } else {
-            self.swapchain_create_info.unwrap().image_extent = surface_capabilities.current_extent;
+            swapchain_create_info_ref.image_extent = surface_capabilities.current_extent;
         }
 
         // checking if the usage flags are supported
@@ -401,7 +400,7 @@ impl BaseVk {
         {
             panic!("Unsupported image usage flags")
         }
-        self.swapchain_create_info.unwrap().image_usage = usage_flags;
+        swapchain_create_info_ref.image_usage = usage_flags;
 
         // checking if the surface format is supported or a substitute needs to be selected
         unsafe {
@@ -417,14 +416,33 @@ impl BaseVk {
                 .find(|e| **e == surface_format)
                 .unwrap_or_else(|| supported_formats.first().unwrap());
 
-            self.swapchain_create_info.unwrap().image_format = chosen_format.format;
-            self.swapchain_create_info.unwrap().image_color_space = chosen_format.color_space;
+            swapchain_create_info_ref.image_format = chosen_format.format;
+            swapchain_create_info_ref.image_color_space = chosen_format.color_space;
+
             self.swapchain = self
                 .swapchain_fn
                 .as_ref()
                 .unwrap()
                 .create_swapchain(&self.swapchain_create_info.unwrap(), None)
                 .expect("Could not create swapchain");
+
+            self.swapchain_image_views = Some(Vec::new());
+            let swapchain_images = self.swapchain_fn.as_ref().unwrap().get_swapchain_images(self.swapchain).unwrap();
+            for swapchain_image in swapchain_images.iter() {
+                let image_view_create_info = vk::ImageViewCreateInfo::builder()
+                    .image(*swapchain_image)
+                    .view_type(vk::ImageViewType::TYPE_2D)
+                    .format(self.swapchain_create_info.unwrap().image_format)
+                    .components(vk::ComponentMapping::default())
+                    .subresource_range(vk::ImageSubresourceRange::builder()
+                        .aspect_mask(vk::ImageAspectFlags::COLOR)
+                        .base_mip_level(0)
+                        .level_count(1)
+                        .base_array_layer(0)
+                        .layer_count(1)
+                        .build());
+                self.swapchain_image_views.as_mut().unwrap().push(self.device.create_image_view(&image_view_create_info, None).unwrap());
+            }
         }
     }
 
@@ -453,6 +471,13 @@ impl BaseVk {
 impl Drop for BaseVk {
     fn drop(&mut self) {
         unsafe {
+            ManuallyDrop::drop(&mut self.allocator);
+            if let Some(swapchain_image_views) = self.swapchain_image_views.as_ref() {
+                for swapchain_image_view in swapchain_image_views.iter() {
+                    self.device.destroy_image_view(*swapchain_image_view, None);
+                }
+            }
+
             if let Some(fp) = self.swapchain_fn.as_ref() {
                 fp.destroy_swapchain(self.swapchain, None);
             }

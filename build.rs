@@ -1,3 +1,4 @@
+use std::env;
 use std::ffi::{OsStr, OsString};
 use std::fs::File;
 use std::io::{Read, Write};
@@ -7,14 +8,14 @@ use shaderc;
 fn main() {
     // Tell the build script to only run again if we change our source shaders
     let shaders_source_dir = Path::new("src/renderer/vk/shaders");
-    //println!("cargo:rerun-if-changed={}", shaders_source_dir.to_str().unwrap());
+    println!("cargo:rerun-if-changed={}", shaders_source_dir.to_str().unwrap());
 
     // Create destination path
     let mut out_dir = PathBuf::new();
-    out_dir.push(std::env::var_os("OUT_DIR").unwrap().to_str().unwrap());
+    out_dir.push(std::env::var_os("CARGO_MANIFEST_DIR").unwrap().to_str().unwrap());
+    out_dir.push("assets");
     out_dir.push("shaders-spirv");
-
-    std::fs::create_dir(out_dir.as_path());
+    std::fs::create_dir_all(out_dir.as_path());
 
     // Create the compiler
     let mut compiler = shaderc::Compiler::new().unwrap();

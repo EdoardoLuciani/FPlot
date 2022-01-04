@@ -2,7 +2,6 @@ mod pointer_chain_helpers;
 mod base_vk;
 pub mod graph_vk;
 
-use std::ffi::OsStr;
 use ash::vk;
 use std::fmt::Write;
 use std::fs::File;
@@ -33,7 +32,6 @@ unsafe extern "system" fn vk_debug_callback(
     vk::FALSE
 }
 
-
 fn get_binary_shader_data<T: AsRef<Path>>(path: T) -> (Vec<u8>, vk::ShaderStageFlags, vk::ShaderModuleCreateInfo) {
     let shader_type_extension = path.as_ref().file_stem().unwrap().to_str().unwrap().rsplit_once('.').expect("No shader type extension found").1;
     let shader_type = match shader_type_extension {
@@ -44,10 +42,10 @@ fn get_binary_shader_data<T: AsRef<Path>>(path: T) -> (Vec<u8>, vk::ShaderStageF
     };
     let mut file = File::open(path).expect("Could not open shader");
     let mut data = Vec::<u8>::new();
-    file.read_to_end(&mut data);
+    file.read_to_end(&mut data).expect("Could not read shader");
 
     let mut module_create_info = vk::ShaderModuleCreateInfo::default();
     module_create_info.code_size = data.len();
     module_create_info.p_code = data.as_ptr() as *const u32;
-    return (data, shader_type, module_create_info);
+    (data, shader_type, module_create_info)
 }

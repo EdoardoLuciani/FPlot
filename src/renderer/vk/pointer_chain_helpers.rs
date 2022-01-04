@@ -4,7 +4,7 @@ use std::ffi::c_void;
 use std::mem::size_of;
 use std::ptr::null_mut;
 
-pub unsafe fn clone_vkPhysicalDeviceFeatures2_structure(
+pub unsafe fn clone_vk_physical_device_features2_structure(
     source: &vk::PhysicalDeviceFeatures2,
 ) -> vk::PhysicalDeviceFeatures2 {
     let mut ret_val = vk::PhysicalDeviceFeatures2::default();
@@ -36,7 +36,7 @@ pub unsafe fn clone_vkPhysicalDeviceFeatures2_structure(
     ret_val
 }
 
-pub unsafe fn destroy_vkPhysicalDeviceFeatures2(source: &mut vk::PhysicalDeviceFeatures2) {
+pub unsafe fn destroy_vk_physical_device_features2(source: &mut vk::PhysicalDeviceFeatures2) {
     let mut p_next = source.p_next;
     let mut p_next_tmp;
     while !p_next.is_null() {
@@ -57,7 +57,7 @@ pub unsafe fn destroy_vkPhysicalDeviceFeatures2(source: &mut vk::PhysicalDeviceF
                     Layout::new::<vk::PhysicalDeviceDescriptorIndexingFeaturesEXT>(),
                 );
             }
-            _ => panic!("Found unrecognized struct inside destroy_vkPhysicalDeviceFeatures2"),
+            _ => panic!("Found unrecognized struct inside destroy_vk_physical_device_features2"),
         }
     }
     source.p_next = null_mut();
@@ -88,7 +88,7 @@ pub unsafe fn compare_device_features_structs(
     true
 }
 
-pub unsafe fn compare_vkPhysicalDeviceFeatures2(
+pub unsafe fn compare_vk_physical_device_features2(
     baseline: &vk::PhysicalDeviceFeatures2,
     desired: &vk::PhysicalDeviceFeatures2,
 ) -> bool {
@@ -119,7 +119,7 @@ pub unsafe fn compare_vkPhysicalDeviceFeatures2(
                     size_of::<vk::PhysicalDeviceDescriptorIndexingFeaturesEXT>(),
                 );
             }
-            _ => panic!("Found unrecognized struct inside compare_vkPhysicalDeviceFeatures2"),
+            _ => panic!("Found unrecognized struct inside compare_vk_physical_device_features2"),
         }
         if !res {
             return false;

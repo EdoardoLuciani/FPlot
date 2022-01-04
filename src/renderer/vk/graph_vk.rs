@@ -1,3 +1,4 @@
+use std::ffi::CStr;
 use ash::{extensions::*, vk};
 use super::base_vk::*;
 use super::super::window_manager::WindowManager;
@@ -6,13 +7,18 @@ pub struct GraphVk {
     bvk: BaseVk,
     window: WindowManager,
     host_curve_buffer: BufferAllocation,
-    device_curve_buffer: BufferAllocation
+    device_curve_buffer: BufferAllocation,
+    renderpass: vk::RenderPass,
+    pipeline_layout: vk::PipelineLayout,
+    pipeline: vk::Pipeline,
+    framebuffers: Vec<vk::Framebuffer>
 }
 
 impl GraphVk {
     pub fn new(window_size: (u32, u32)) -> Self {
         let mut desired_features = vk::PhysicalDeviceFeatures2::default();
-        let mut window = WindowManager::new(window_size, None);
+        desired_features.features.fill_mode_non_solid = vk::TRUE;
+        let window = WindowManager::new(window_size, None);
         let mut base_vk = BaseVk::new(
             "FPlot",
             &[],
@@ -35,8 +41,9 @@ impl GraphVk {
         );
         let buffers = Self::create_curve_vertex_buffers(&mut base_vk, (window_size.0 as usize * 2 * std::mem::size_of::<f32>()) as u64);
         let renderpass = Self::create_renderpass(&mut base_vk);
-        let pipeline = Self::create_graph_pipeline(&mut base_vk, renderpass);
-        GraphVk{bvk: base_vk, window, host_curve_buffer: buffers[0].clone(), device_curve_buffer: buffers[1].clone()}
+        let pipeline_data = Self::create_graph_pipeline(&mut base_vk, std::path::Path::new("assets/shaders-spirv"), renderpass);
+        let framebuffers = Self::create_framebuffers(&mut base_vk, renderpass);
+        GraphVk{bvk: base_vk, window, host_curve_buffer: buffers[0].clone(), device_curve_buffer: buffers[1].clone(), renderpass, pipeline_layout: pipeline_data.0, pipeline: pipeline_data.1, framebuffers}
     }
 
     fn create_curve_vertex_buffers(bvk: &mut BaseVk, size: u64) -> [BufferAllocation; 2] {
@@ -88,24 +95,27 @@ impl GraphVk {
         renderpass
     }
 
-    fn create_graph_pipeline(bvk: &mut BaseVk, renderpass: vk::RenderPass) -> vk::Pipeline {
+    fn create_graph_pipeline(bvk: &mut BaseVk, shader_dir: &std::path::Path, renderpass: vk::RenderPass) -> (vk::PipelineLayout, vk::Pipeline) {
         // Creating the shader modules
-        let vertex_shader = super::get_binary_shader_data("vertex.vert.spirv");
+        let vertex_shader = super::get_binary_shader_data(shader_dir.join("vertex.vert.spirv"));
         let vertex_shader_module = unsafe {
             bvk.device.create_shader_module(&vertex_shader.2, None).unwrap()
         };
-        let fragment_shader = super::get_binary_shader_data("fragment.vert.spirv");
+        let fragment_shader = super::get_binary_shader_data(shader_dir.join("fragment.frag.spirv"));
         let fragment_shader_module = unsafe {
             bvk.device.create_shader_module(&fragment_shader.2, None).unwrap()
         };
-        let mut pipeline_shader_stage_create_infos: [vk::PipelineShaderStageCreateInfo; 2] = [
+        let shader_entry_point_name = unsafe {CStr::from_bytes_with_nul_unchecked(b"main\0")};
+        let pipeline_shader_stage_create_infos: [vk::PipelineShaderStageCreateInfo; 2] = [
             vk::PipelineShaderStageCreateInfo::builder()
                 .stage(vertex_shader.1)
                 .module(vertex_shader_module)
+                .name(shader_entry_point_name)
                 .build(),
             vk::PipelineShaderStageCreateInfo::builder()
                 .stage(fragment_shader.1)
                 .module(fragment_shader_module)
+                .name(shader_entry_point_name)
                 .build(),
         ];
 
@@ -153,11 +163,11 @@ impl GraphVk {
             .polygon_mode(vk::PolygonMode::POINT)
             .cull_mode(vk::CullModeFlags::NONE)
             .front_face(vk::FrontFace::COUNTER_CLOCKWISE)
-            .depth_bias_enable(false);
+            .depth_bias_enable(false)
+            .line_width(1.0f32);
 
-        let pipeline_multisample_state_create_info = vk::PipelineMultisampleStateCreateInfo::default();
-
-        let pipeline_depth_stencil_state_create_info = vk::PipelineDepthStencilStateCreateInfo::default();
+        let pipeline_multisample_state_create_info = vk::PipelineMultisampleStateCreateInfo::builder()
+            .rasterization_samples(vk::SampleCountFlags::TYPE_1);
 
         let color_blend_attachment_state = vk::PipelineColorBlendAttachmentState::builder()
             .blend_enable(false)
@@ -196,13 +206,42 @@ impl GraphVk {
             bvk.device.destroy_shader_module(vertex_shader_module, None);
             bvk.device.destroy_shader_module(fragment_shader_module, None);
         }
-        pipeline[0]
+        (pipeline_layout, pipeline[0])
     }
+
+    fn create_framebuffers(bvk: &mut BaseVk, renderpass: vk::RenderPass) -> Vec<vk::Framebuffer> {
+        let mut out_vec = Vec::new();
+        for swapchain_image_view in bvk.swapchain_image_views.as_ref().unwrap().iter() {
+            let framebuffer_create_info = vk::FramebufferCreateInfo::builder()
+                .render_pass(renderpass)
+                .attachments(std::slice::from_ref(swapchain_image_view))
+                .width(bvk.swapchain_create_info.unwrap().image_extent.width)
+                .height(bvk.swapchain_create_info.unwrap().image_extent.height)
+                .layers(1);
+            out_vec.push(unsafe {
+                bvk.device.create_framebuffer(&framebuffer_create_info, None).unwrap()
+            });
+        }
+        out_vec
+    }
+
+
 }
 
 impl Drop for GraphVk {
     fn drop(&mut self) {
         self.bvk.destroy_buffer(&self.host_curve_buffer);
         self.bvk.destroy_buffer(&self.device_curve_buffer);
+
+        for framebuffer in self.framebuffers.iter() {
+            unsafe {
+                self.bvk.device.destroy_framebuffer(*framebuffer, None);
+            }
+        }
+        unsafe {
+            self.bvk.device.destroy_pipeline_layout(self.pipeline_layout, None);
+            self.bvk.device.destroy_pipeline(self.pipeline, None);
+            self.bvk.device.destroy_render_pass(self.renderpass, None);
+        }
     }
 }
