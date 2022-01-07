@@ -6,10 +6,8 @@ use std::borrow::Borrow;
 use std::collections::HashSet;
 use std::ffi::{CStr, CString};
 use std::mem::ManuallyDrop;
-use std::os::raw::c_char;
 
 use raw_window_handle::RawWindowHandle;
-use winit::event::VirtualKeyCode::Comma;
 
 pub struct BaseVk {
     entry_fn: ash::Entry,
@@ -45,6 +43,12 @@ pub struct ImageAllocation {
 pub struct CommandRecordInfo {
     pub pool: vk::CommandPool,
     pub buffers: Vec<vk::CommandBuffer>,
+}
+
+#[derive(Clone)]
+pub struct DescriptorInfo {
+    pub pool: vk::DescriptorPool,
+    pub buffers: Vec<vk::DescriptorSet>,
 }
 
 /**
@@ -454,7 +458,14 @@ impl BaseVk {
                 .create_swapchain(&self.swapchain_create_info.unwrap(), None)
                 .expect("Could not create swapchain");
 
-            self.swapchain_image_views = Some(Vec::new());
+            if let Some(swapchain_image_views) = &mut self.swapchain_image_views {
+                swapchain_image_views.iter().for_each(|siv| self.device.destroy_image_view(*siv, None));
+                swapchain_image_views.clear();
+            }
+            else {
+                self.swapchain_image_views = Some(Vec::new());
+            }
+
             let swapchain_images = self
                 .swapchain_fn
                 .as_ref()
@@ -547,6 +558,28 @@ impl BaseVk {
         unsafe {
             self.device.free_command_buffers(cmri.pool, &cmri.buffers);
             self.device.destroy_command_pool(cmri.pool, None);
+        }
+    }
+
+    pub fn create_descriptor_pool_and_sets(&mut self, pool_sizes: &[vk::DescriptorPoolSize], sets: &[vk::DescriptorSetLayout]) -> DescriptorInfo {
+        let descriptor_pool_create_info = vk::DescriptorPoolCreateInfo::builder()
+            .max_sets(sets.len() as u32)
+            .pool_sizes(&pool_sizes);
+        let descriptor_pool = unsafe {
+            self.device.create_descriptor_pool(&descriptor_pool_create_info, None).unwrap()
+        };
+        let descriptor_set_allocate_info = vk::DescriptorSetAllocateInfo::builder()
+            .descriptor_pool(descriptor_pool)
+            .set_layouts(sets);
+        let descriptor_sets = unsafe {
+            self.device.allocate_descriptor_sets(&descriptor_set_allocate_info).unwrap()
+        };
+        DescriptorInfo { pool: descriptor_pool, buffers: descriptor_sets }
+    }
+
+    pub fn destroy_descriptor_pool_and_sets(&mut self, di: &DescriptorInfo) {
+        unsafe {
+            self.device.destroy_descriptor_pool(di.pool, None);
         }
     }
 

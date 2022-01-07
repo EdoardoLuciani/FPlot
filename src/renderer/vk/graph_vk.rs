@@ -1,10 +1,11 @@
 use std::borrow::{Borrow, BorrowMut};
+use std::collections::HashMap;
 use super::base_vk::*;
 use ash::{extensions::*, vk};
 use std::ffi::CStr;
-use rand::distributions;
+use gpu_allocator::MemoryLocation;
+use nalgebra::*;
 use raw_window_handle::RawWindowHandle;
-use rand::distributions::Distribution;
 
 struct FrameData {
     after_exec_fence: vk::Fence,
@@ -16,10 +17,13 @@ pub struct GraphVk {
     sync2: khr::Synchronization2,
     host_curve_buffer: BufferAllocation,
     device_curve_buffer: BufferAllocation,
+    transform_uniform_buffer: BufferAllocation,
     frames_data: Vec<FrameData>,
     renderpass: vk::RenderPass,
+    descriptor_set_layout: vk::DescriptorSetLayout,
     pipeline_layout: vk::PipelineLayout,
     pipeline: vk::Pipeline,
+    descriptor_info: DescriptorInfo,
     framebuffers: Vec<vk::Framebuffer>,
     semaphores: Vec<vk::Semaphore>,
     frames_count: u64,
@@ -57,12 +61,21 @@ impl GraphVk {
             &mut base_vk,
             (window_size.0 as usize * 2 * std::mem::size_of::<f32>()) as u64,
         );
+
+        let buffer_create_info = vk::BufferCreateInfo::builder()
+            .size(std::mem::size_of::<nalgebra::Matrix4<f32>>() as u64)
+            .usage(vk::BufferUsageFlags::UNIFORM_BUFFER);
+        let transform_uniform_buffer = base_vk.allocate_buffer(&buffer_create_info, MemoryLocation::CpuToGpu);
+
         let renderpass = Self::create_renderpass(&mut base_vk);
+        let (descriptor_set_layout, descriptor_pool_size) = Self::create_descriptor_set_layout(&mut base_vk);
         let pipeline_data = Self::create_graph_pipeline(
             &mut base_vk,
             std::path::Path::new("assets/shaders-spirv"),
             renderpass,
+            descriptor_set_layout
         );
+        let descriptor_info = base_vk.create_descriptor_pool_and_sets(std::slice::from_ref(&descriptor_pool_size), std::slice::from_ref(&descriptor_set_layout));
         let framebuffers = Self::create_framebuffers(&mut base_vk, renderpass);
         let semaphores = base_vk.create_semaphores(2);
 
@@ -83,10 +96,13 @@ impl GraphVk {
             sync2,
             host_curve_buffer: buffers[0].clone(),
             device_curve_buffer: buffers[1].clone(),
+            transform_uniform_buffer,
             frames_data,
             renderpass,
+            descriptor_set_layout,
             pipeline_layout: pipeline_data.0,
             pipeline: pipeline_data.1,
+            descriptor_info,
             framebuffers,
             semaphores,
             frames_count: 0,
@@ -120,6 +136,26 @@ impl GraphVk {
         }
     }
 
+    pub fn fill_graph_buffer(&mut self, fun : fn(f32) -> f32) {
+        let step = 2.0f32/self.bvk.swapchain_create_info.unwrap().image_extent.width as f32;
+        let mut x = -1.0f32;
+        let data_slice = unsafe { std::slice::from_raw_parts_mut(self.host_curve_buffer.allocation.mapped_ptr().unwrap().as_ptr() as *mut [f32; 2], self.bvk.swapchain_create_info.unwrap().image_extent.width as usize) };
+        for i in 0..self.bvk.swapchain_create_info.unwrap().image_extent.width as usize {
+            data_slice[i][0] = x;
+            data_slice[i][1] = fun(x);
+            x += step;
+        }
+    }
+
+    pub fn set_position(&mut self, position: &Vector3<f32>) {
+        let dst_ptr = std::ptr::slice_from_raw_parts_mut(self.transform_uniform_buffer.allocation.mapped_ptr().unwrap().as_ptr() as *mut f32,
+                                               self.transform_uniform_buffer.allocation.size() as usize /std::mem::size_of::<f32>());
+        let mat = Matrix4::<f32>::new_translation(position);
+        unsafe {
+            (*dst_ptr).copy_from_slice(mat.data.as_slice());
+        }
+    }
+
     fn create_renderpass(bvk: &BaseVk) -> vk::RenderPass {
         let attachment_descriptions = vk::AttachmentDescription::builder()
             .format(bvk.swapchain_create_info.unwrap().image_format)
@@ -147,10 +183,28 @@ impl GraphVk {
         renderpass
     }
 
+    fn create_descriptor_set_layout(bvk: &BaseVk) -> (vk::DescriptorSetLayout, vk::DescriptorPoolSize) {
+        let descriptor_bindings: [vk::DescriptorSetLayoutBinding; 1] = [
+            vk::DescriptorSetLayoutBinding::builder()
+                .binding(0)
+                .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
+                .descriptor_count(1)
+                .stage_flags(vk::ShaderStageFlags::VERTEX)
+                .build(),
+        ];
+        let descriptor_set_layout_create_info = vk::DescriptorSetLayoutCreateInfo::builder()
+            .bindings(&descriptor_bindings);
+        let dsl = unsafe {
+            bvk.device.create_descriptor_set_layout(&descriptor_set_layout_create_info, None).unwrap()
+        };
+        (dsl, vk::DescriptorPoolSize{ ty: vk::DescriptorType::UNIFORM_BUFFER, descriptor_count: 1 })
+    }
+
     fn create_graph_pipeline(
         bvk: &BaseVk,
         shader_dir: &std::path::Path,
         renderpass: vk::RenderPass,
+        descriptor_set_layout: vk::DescriptorSetLayout
     ) -> (vk::PipelineLayout, vk::Pipeline) {
         // Creating the shader modules
         let vertex_shader = super::get_binary_shader_data(shader_dir.join("vertex.vert.spirv"));
@@ -248,7 +302,8 @@ impl GraphVk {
         let pipeline_dynamic_state_create_info =
             vk::PipelineDynamicStateCreateInfo::builder().dynamic_states(&dynamic_states);
 
-        let pipeline_layout_create_info = vk::PipelineLayoutCreateInfo::default();
+        let pipeline_layout_create_info = vk::PipelineLayoutCreateInfo::builder()
+            .set_layouts(std::slice::from_ref(&descriptor_set_layout));
         let pipeline_layout = unsafe {
             bvk.device
                 .create_pipeline_layout(&pipeline_layout_create_info, None)
@@ -304,6 +359,27 @@ impl GraphVk {
         out_vec
     }
 
+    pub fn prepare(&mut self) {
+        self.write_descriptor_sets();
+        self.frames_data.iter().for_each(|e| self.record_static_command_buffers(&e.main_command));
+    }
+
+    fn write_descriptor_sets(&self) {
+        let descriptor_buffer_info = vk::DescriptorBufferInfo::builder()
+            .buffer(self.transform_uniform_buffer.buffer)
+            .offset(0)
+            .range(vk::WHOLE_SIZE);
+        let write_descriptor_sets = vk::WriteDescriptorSet::builder()
+            .dst_set(self.descriptor_info.buffers[0])
+            .dst_binding(0)
+            .dst_array_element(0)
+            .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
+            .buffer_info(std::slice::from_ref(&descriptor_buffer_info));
+        unsafe {
+            self.bvk.device.update_descriptor_sets(std::slice::from_ref(&write_descriptor_sets), &[]);
+        }
+    }
+
     fn record_static_command_buffers(&self, cmri: &CommandRecordInfo) {
         unsafe {
             self.bvk.device.reset_command_pool(cmri.pool, vk::CommandPoolResetFlags::empty());
@@ -355,27 +431,13 @@ impl GraphVk {
                     .extent(self.bvk.swapchain_create_info.unwrap().image_extent);
                 self.bvk.device.cmd_set_scissor(*cmd_buf, 0, std::slice::from_ref(&scissor));
                 self.bvk.device.cmd_bind_vertex_buffers(*cmd_buf, 0, std::slice::from_ref(&self.device_curve_buffer.buffer), std::slice::from_ref(&0));
+                self.bvk.device.cmd_bind_descriptor_sets(*cmd_buf, vk::PipelineBindPoint::GRAPHICS, self.pipeline_layout, 0, std::slice::from_ref(&self.descriptor_info.buffers[0]), &[]);
                 self.bvk.device.cmd_draw(*cmd_buf, self.bvk.swapchain_create_info.unwrap().image_extent.width, 1, 0, 0);
                 self.bvk.device.cmd_end_render_pass(*cmd_buf);
                 self.bvk.device.end_command_buffer(*cmd_buf);
             }
 
         }
-    }
-
-    pub fn fill_graph_buffer(&mut self, fun : fn(f32) -> f32) {
-        let step = 2.0f32/self.bvk.swapchain_create_info.unwrap().image_extent.width as f32;
-        let mut x = -1.0f32;
-        let data_slice = unsafe { std::slice::from_raw_parts_mut(self.host_curve_buffer.allocation.mapped_ptr().unwrap().as_ptr() as *mut [f32; 2], self.bvk.swapchain_create_info.unwrap().image_extent.width as usize) };
-        for i in 0..self.bvk.swapchain_create_info.unwrap().image_extent.width as usize {
-            data_slice[i][0] = x;
-            data_slice[i][1] = fun(x);
-            x += step;
-        }
-    }
-
-    pub fn prepare(&mut self) {
-        self.frames_data.iter().for_each(|e| self.record_static_command_buffers(&e.main_command));
     }
 
     pub fn present_loop(&mut self, window: &winit::window::Window) {
@@ -386,17 +448,18 @@ impl GraphVk {
             if res.is_err() || res.unwrap().1 {
                 self.bvk.device.device_wait_idle();
                 self.bvk.recreate_swapchain(
-                    vk::PresentModeKHR::MAILBOX,
+                    self.bvk.swapchain_create_info.unwrap().present_mode,
                     vk::Extent2D {
                         width: window.inner_size().width,
                         height: window.inner_size().height
                     },
-                    vk::ImageUsageFlags::COLOR_ATTACHMENT,
+                    self.bvk.swapchain_create_info.unwrap().image_usage,
                     vk::SurfaceFormatKHR {
-                        format: vk::Format::B8G8R8_UNORM,
-                        color_space: vk::ColorSpaceKHR::SRGB_NONLINEAR,
+                        format: self.bvk.swapchain_create_info.unwrap().image_format,
+                        color_space: self.bvk.swapchain_create_info.unwrap().image_color_space,
                     },
                 );
+                self.framebuffers.iter().for_each(|f| unsafe {self.bvk.device.destroy_framebuffer(*f, None)});
                 self.framebuffers = Self::create_framebuffers(&self.bvk, self.renderpass);
                 self.prepare();
                 return
@@ -436,7 +499,11 @@ impl GraphVk {
 
 impl Drop for GraphVk {
     fn drop(&mut self) {
-        unsafe { self.bvk.device.device_wait_idle() };
+        unsafe {
+            self.bvk.device.device_wait_idle();
+            self.bvk.device.destroy_descriptor_set_layout(self.descriptor_set_layout, None);
+        };
+        self.bvk.destroy_descriptor_pool_and_sets(&self.descriptor_info);
         self.bvk.destroy_semaphores(&self.semaphores);
         self.frames_data.iter().for_each(|frame_data| {
             unsafe { self.bvk.device.destroy_fence(frame_data.after_exec_fence, None) };
@@ -445,6 +512,7 @@ impl Drop for GraphVk {
 
         self.bvk.destroy_buffer(&self.host_curve_buffer);
         self.bvk.destroy_buffer(&self.device_curve_buffer);
+        self.bvk.destroy_buffer(&self.transform_uniform_buffer);
 
         self.framebuffers.iter().for_each(|framebuffer| {
             unsafe {
