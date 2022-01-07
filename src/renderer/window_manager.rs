@@ -7,8 +7,8 @@ use winit::window::Fullscreen;
 use winit::*;
 
 pub struct WindowManager {
-    event_loop: EventLoop<()>,
-    window: window::Window,
+    pub event_loop: EventLoop<()>,
+    pub window: window::Window,
 }
 
 impl WindowManager {
@@ -27,19 +27,5 @@ impl WindowManager {
 
     pub fn get_window_handle(&self) -> RawWindowHandle {
         self.window.raw_window_handle()
-    }
-
-    pub fn start(&mut self) {
-        self.event_loop.run_return(|event, _, control_flow| {
-            *control_flow = ControlFlow::Wait;
-
-            match event {
-                Event::WindowEvent {
-                    event: WindowEvent::CloseRequested,
-                    window_id,
-                } if window_id == self.window.id() => *control_flow = ControlFlow::Exit,
-                _ => (),
-            }
-        });
     }
 }

@@ -2,7 +2,7 @@ use ash::vk;
 use std::alloc::Layout;
 use std::ffi::c_void;
 use std::mem::size_of;
-use std::ptr::null_mut;
+use std::ptr::{addr_of, null_mut};
 
 pub unsafe fn clone_vk_physical_device_features2_structure(
     source: &vk::PhysicalDeviceFeatures2,
@@ -25,6 +25,12 @@ pub unsafe fn clone_vk_physical_device_features2_structure(
                 cloned_child_struct_ptr = std::alloc::alloc(lay);
                 (*(cloned_child_struct_ptr as *mut vk::PhysicalDeviceVulkan11Features)).s_type =
                     vk::StructureType::PHYSICAL_DEVICE_DESCRIPTOR_INDEXING_FEATURES_EXT;
+            }
+            vk::StructureType::PHYSICAL_DEVICE_SYNCHRONIZATION_2_FEATURES_KHR => {
+                let lay = Layout::new::<vk::PhysicalDeviceSynchronization2FeaturesKHR>();
+                cloned_child_struct_ptr = std::alloc::alloc(lay);
+                (*(cloned_child_struct_ptr as *mut vk::PhysicalDeviceVulkan11Features)).s_type =
+                    vk::StructureType::PHYSICAL_DEVICE_SYNCHRONIZATION_2_FEATURES_KHR;
             }
             _ => panic!("Found unrecognized struct inside clone_vkPhysicalDeviceFeatures2"),
         }
@@ -57,6 +63,14 @@ pub unsafe fn destroy_vk_physical_device_features2(source: &mut vk::PhysicalDevi
                     Layout::new::<vk::PhysicalDeviceDescriptorIndexingFeaturesEXT>(),
                 );
             }
+            vk::StructureType::PHYSICAL_DEVICE_SYNCHRONIZATION_2_FEATURES_KHR => {
+                p_next_tmp = p_next;
+                p_next = (*(p_next as *const vk::PhysicalDeviceFeatures2)).p_next;
+                std::alloc::dealloc(
+                    p_next_tmp as *mut u8,
+                    Layout::new::<vk::PhysicalDeviceSynchronization2FeaturesKHR>(),
+                );
+            }
             _ => panic!("Found unrecognized struct inside destroy_vk_physical_device_features2"),
         }
     }
@@ -66,7 +80,7 @@ pub unsafe fn destroy_vk_physical_device_features2(source: &mut vk::PhysicalDevi
 pub unsafe fn compare_device_features_structs(
     baseline: *const c_void,
     desired: *const c_void,
-    size: usize,
+    mut size: usize,
 ) -> bool {
     // casting the structure to a PhysicalDeviceFeatures2 struct to compare the struct identifier
     if (*(baseline as *const vk::PhysicalDeviceFeatures2)).s_type
@@ -74,13 +88,17 @@ pub unsafe fn compare_device_features_structs(
     {
         return false;
     }
-
     // then we know that the structs type are the same so we cast them to a view of u32
     // the offset has a 4 added to it because of struct padding
-    let offset = size_of::<ash::vk::StructureType>() + size_of::<*mut c_void>() + 4;
+    let offset = size_of::<ash::vk::StructureType>() + 4 + size_of::<*mut c_void>();
+
+    // struct at the end will have 4 more bytes due to the fact its size has to be divisible by the
+    // largest member which in this case is size_of<*mut c_void> = 8
+    size -= 4;
+
     let baseline_data = baseline.add(offset) as *const u32;
     let desired_data = desired.add(offset) as *const u32;
-    for i in 0..((size - offset) / size_of::<u32>()) {
+    for i in 0..((size - offset) / size_of::<vk::Bool32>()) {
         if *(desired_data.add(i)) > *(baseline_data.add(i)) {
             return false;
         }
@@ -117,6 +135,13 @@ pub unsafe fn compare_vk_physical_device_features2(
                     baseline_ptr,
                     desired_ptr,
                     size_of::<vk::PhysicalDeviceDescriptorIndexingFeaturesEXT>(),
+                );
+            }
+            vk::StructureType::PHYSICAL_DEVICE_SYNCHRONIZATION_2_FEATURES_KHR => {
+                res = compare_device_features_structs(
+                    baseline_ptr,
+                    desired_ptr,
+                    size_of::<vk::PhysicalDeviceSynchronization2FeaturesKHR>(),
                 );
             }
             _ => panic!("Found unrecognized struct inside compare_vk_physical_device_features2"),

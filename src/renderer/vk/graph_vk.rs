@@ -1,32 +1,43 @@
-use super::super::window_manager::WindowManager;
+use std::borrow::{Borrow, BorrowMut};
 use super::base_vk::*;
 use ash::{extensions::*, vk};
 use std::ffi::CStr;
+use raw_window_handle::RawWindowHandle;
+use rand::distributions::{Distribution, Uniform};
+
+struct FrameData {
+    after_exec_fence: vk::Fence,
+    main_command: CommandRecordInfo,
+}
 
 pub struct GraphVk {
     bvk: BaseVk,
-    window: WindowManager,
+    sync2: khr::Synchronization2,
     host_curve_buffer: BufferAllocation,
     device_curve_buffer: BufferAllocation,
-    main_command: CommandRecordInfo,
+    frames_data: Vec<FrameData>,
     renderpass: vk::RenderPass,
     pipeline_layout: vk::PipelineLayout,
     pipeline: vk::Pipeline,
     framebuffers: Vec<vk::Framebuffer>,
+    semaphores: Vec<vk::Semaphore>,
+    frames_count: u64,
 }
 
 impl GraphVk {
-    pub fn new(window_size: (u32, u32)) -> Self {
-        let mut desired_features = vk::PhysicalDeviceFeatures2::default();
+    pub fn new(window_size: (u32, u32), window_handle: RawWindowHandle) -> Self {
+        let mut sync2 = vk::PhysicalDeviceSynchronization2FeaturesKHR::builder()
+            .synchronization2(true);
+        let mut desired_features = vk::PhysicalDeviceFeatures2::builder()
+            .push_next(&mut sync2);
         desired_features.features.fill_mode_non_solid = vk::TRUE;
-        let window = WindowManager::new(window_size, None);
         let mut base_vk = BaseVk::new(
             "FPlot",
             &[],
-            &[],
+            &["VK_KHR_synchronization2"],
             &desired_features,
             std::slice::from_ref(&(vk::QueueFlags::GRAPHICS, 1.0f32)),
-            Some(window.get_window_handle()),
+            Some(window_handle),
         );
         base_vk.recreate_swapchain(
             vk::PresentModeKHR::MAILBOX,
@@ -40,6 +51,7 @@ impl GraphVk {
                 color_space: vk::ColorSpaceKHR::SRGB_NONLINEAR,
             },
         );
+        let sync2 =  khr::Synchronization2::new(&base_vk.instance, &base_vk.device);
         let buffers = Self::create_curve_vertex_buffers(
             &mut base_vk,
             (window_size.0 as usize * 2 * std::mem::size_of::<f32>()) as u64,
@@ -51,21 +63,32 @@ impl GraphVk {
             renderpass,
         );
         let framebuffers = Self::create_framebuffers(&mut base_vk, renderpass);
-        let main_command = base_vk.create_cmd_pool_and_buffers(
-            vk::CommandPoolCreateFlags::empty(),
-            vk::CommandBufferLevel::PRIMARY,
-            base_vk.swapchain_create_info.unwrap().min_image_count,
-        );
+        let semaphores = base_vk.create_semaphores(2);
+
+        let fence_create_info = vk::FenceCreateInfo::builder()
+            .flags(vk::FenceCreateFlags::SIGNALED);
+        let frames_data= (0..3).map(|_|
+            FrameData {
+                after_exec_fence: unsafe {base_vk.device.create_fence(&fence_create_info, None).unwrap()},
+                main_command: base_vk.create_cmd_pool_and_buffers(
+                    vk::CommandPoolCreateFlags::empty(),
+                    vk::CommandBufferLevel::PRIMARY,
+                    base_vk.swapchain_image_views.as_ref().unwrap().len() as u32,
+                )
+            }
+        ).collect();
         GraphVk {
             bvk: base_vk,
-            window,
+            sync2,
             host_curve_buffer: buffers[0].clone(),
             device_curve_buffer: buffers[1].clone(),
-            main_command,
+            frames_data,
             renderpass,
             pipeline_layout: pipeline_data.0,
             pipeline: pipeline_data.1,
             framebuffers,
+            semaphores,
+            frames_count: 0,
         }
     }
 
@@ -96,7 +119,7 @@ impl GraphVk {
         }
     }
 
-    fn create_renderpass(bvk: &mut BaseVk) -> vk::RenderPass {
+    fn create_renderpass(bvk: &BaseVk) -> vk::RenderPass {
         let attachment_descriptions = vk::AttachmentDescription::builder()
             .format(bvk.swapchain_create_info.unwrap().image_format)
             .samples(vk::SampleCountFlags::TYPE_1)
@@ -124,7 +147,7 @@ impl GraphVk {
     }
 
     fn create_graph_pipeline(
-        bvk: &mut BaseVk,
+        bvk: &BaseVk,
         shader_dir: &std::path::Path,
         renderpass: vk::RenderPass,
     ) -> (vk::PipelineLayout, vk::Pipeline) {
@@ -201,7 +224,7 @@ impl GraphVk {
             vk::PipelineRasterizationStateCreateInfo::builder()
                 .depth_clamp_enable(false)
                 .rasterizer_discard_enable(false)
-                .polygon_mode(vk::PolygonMode::POINT)
+                .polygon_mode(vk::PolygonMode::FILL)
                 .cull_mode(vk::CullModeFlags::NONE)
                 .front_face(vk::FrontFace::COUNTER_CLOCKWISE)
                 .depth_bias_enable(false)
@@ -261,7 +284,7 @@ impl GraphVk {
         (pipeline_layout, pipeline[0])
     }
 
-    fn create_framebuffers(bvk: &mut BaseVk, renderpass: vk::RenderPass) -> Vec<vk::Framebuffer> {
+    fn create_framebuffers(bvk: &BaseVk, renderpass: vk::RenderPass) -> Vec<vk::Framebuffer> {
         let mut out_vec = Vec::new();
         for swapchain_image_view in bvk.swapchain_image_views.as_ref().unwrap().iter() {
             let framebuffer_create_info = vk::FramebufferCreateInfo::builder()
@@ -279,19 +302,163 @@ impl GraphVk {
         out_vec
     }
 
-    fn record_static_command_buffers(&mut self) {}
+    fn record_static_command_buffers(&self, cmri: &CommandRecordInfo) {
+        unsafe {
+            self.bvk.device.reset_command_pool(cmri.pool, vk::CommandPoolResetFlags::empty());
+        }
+        for (i, cmd_buf) in cmri.buffers.iter().enumerate() {
+            let command_buffer_begin_info = vk::CommandBufferBeginInfo::default();
+            unsafe {
+                self.bvk.device.begin_command_buffer(*cmd_buf, &command_buffer_begin_info);
+                let region = vk::BufferCopy::builder()
+                    .src_offset(0)
+                    .dst_offset(0)
+                    .size(self.host_curve_buffer.allocation.size());
+                self.bvk.device.cmd_copy_buffer(*cmd_buf, self.host_curve_buffer.buffer, self.device_curve_buffer.buffer, std::slice::from_ref(&region));
+
+                let buffer_memory_barrier = vk::BufferMemoryBarrier2KHR::builder()
+                    .src_stage_mask(vk::PipelineStageFlags2KHR::COPY)
+                    .src_access_mask(vk::AccessFlags2KHR::TRANSFER_WRITE)
+                    .dst_stage_mask(vk::PipelineStageFlags2KHR::VERTEX_ATTRIBUTE_INPUT)
+                    .dst_access_mask(vk::AccessFlags2KHR::VERTEX_ATTRIBUTE_READ)
+                    .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                    .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                    .buffer(self.device_curve_buffer.buffer)
+                    .offset(0)
+                    .size(vk::WHOLE_SIZE);
+                let dependancy_info = vk::DependencyInfoKHR::builder()
+                    .buffer_memory_barriers(std::slice::from_ref(&buffer_memory_barrier));
+                self.sync2.cmd_pipeline_barrier2(*cmd_buf, &dependancy_info);
+
+                let mut clear_values = vk::ClearValue::default();
+                clear_values.color.float32 = [0.0f32, 0.0f32, 0.0f32, 0.0f32];
+                let renderpass_begin_info = vk::RenderPassBeginInfo::builder()
+                    .render_pass(self.renderpass)
+                    .framebuffer(self.framebuffers[i])
+                    .render_area(vk::Rect2D{offset: vk::Offset2D{x: 0, y: 0}, extent: self.bvk.swapchain_create_info.unwrap().image_extent})
+                    .clear_values(std::slice::from_ref(&clear_values));
+                self.bvk.device.cmd_begin_render_pass(*cmd_buf, &renderpass_begin_info, vk::SubpassContents::INLINE);
+
+                self.bvk.device.cmd_bind_pipeline(*cmd_buf, vk::PipelineBindPoint::GRAPHICS, self.pipeline);
+                let viewport = vk::Viewport::builder()
+                    .x(0.0f32)
+                    .y(0.0f32)
+                    .width(self.bvk.swapchain_create_info.unwrap().image_extent.width as f32)
+                    .height(self.bvk.swapchain_create_info.unwrap().image_extent.height as f32)
+                    .min_depth(0.0f32)
+                    .max_depth(1.0f32);
+                self.bvk.device.cmd_set_viewport(*cmd_buf, 0, std::slice::from_ref(&viewport));
+                let scissor = vk::Rect2D::builder()
+                    .offset(vk::Offset2D{x:0, y:0})
+                    .extent(self.bvk.swapchain_create_info.unwrap().image_extent);
+                self.bvk.device.cmd_set_scissor(*cmd_buf, 0, std::slice::from_ref(&scissor));
+                self.bvk.device.cmd_bind_vertex_buffers(*cmd_buf, 0, std::slice::from_ref(&self.device_curve_buffer.buffer), std::slice::from_ref(&0));
+                //self.bvk.device.cmd_draw(*cmd_buf, self.bvk.swapchain_create_info.unwrap().image_extent.width, 1, 0, 0);
+                self.bvk.device.cmd_draw(*cmd_buf, 3, 1, 0, 0);
+                self.bvk.device.cmd_end_render_pass(*cmd_buf);
+                self.bvk.device.end_command_buffer(*cmd_buf);
+            }
+
+        }
+    }
+
+    pub fn fill_graph_buffer(&mut self, fun : fn(f32) -> f32) {
+        let step = 2.0f32/self.bvk.swapchain_create_info.unwrap().image_extent.width as f32;
+        let mut x = -1.0f32;
+        let data_slice = unsafe { std::slice::from_raw_parts_mut(self.host_curve_buffer.allocation.mapped_ptr().unwrap().as_ptr() as *mut [f32; 2], self.bvk.swapchain_create_info.unwrap().image_extent.width as usize) };
+        let mut rng = rand::thread_rng();
+        let uniform_dist = Uniform::from(0.0f32..1.0f32);
+        for i in 0..self.bvk.swapchain_create_info.unwrap().image_extent.width as usize {
+            /*
+            data_slice[i][0] = 0.0f32;
+            data_slice[i][1] = fun(x);
+            */
+            data_slice[i][0] = uniform_dist.sample(&mut rng);
+            data_slice[i][1] = uniform_dist.sample(&mut rng);
+            x += step;
+        }
+    }
+
+    pub fn prepare(&mut self) {
+        for i in 0..self.frames_data.len() {
+            self.record_static_command_buffers(&self.frames_data[i].main_command);
+        }
+        //self.frames_data.iter_mut().for_each(|e| self.record_static_command_buffers(&mut e.main_command));
+    }
+
+    pub fn present_loop(&mut self, window: &winit::window::Window) {
+        let current_frame_data = &self.frames_data[self.frames_count as usize % self.frames_data.len()];
+        unsafe {
+            let res = self.bvk.swapchain_fn.as_ref().unwrap().acquire_next_image(self.bvk.swapchain, u64::MAX, self.semaphores[0], vk::Fence::null()).unwrap();
+            // if the swapchain is suboptimal
+            if res.1 {
+                unsafe {
+                    self.bvk.device.device_wait_idle();
+                }
+                self.bvk.recreate_swapchain(
+                    vk::PresentModeKHR::MAILBOX,
+                    vk::Extent2D {
+                        width: window.inner_size().width,
+                        height: window.inner_size().height
+                    },
+                    vk::ImageUsageFlags::COLOR_ATTACHMENT,
+                    vk::SurfaceFormatKHR {
+                        format: vk::Format::B8G8R8_UNORM,
+                        color_space: vk::ColorSpaceKHR::SRGB_NONLINEAR,
+                    },
+                );
+                self.framebuffers = Self::create_framebuffers(&self.bvk, self.renderpass);
+                self.prepare();
+                return
+            }
+            self.bvk.device.wait_for_fences(std::slice::from_ref(&current_frame_data.after_exec_fence), false, u64::MAX);
+            self.bvk.device.reset_fences(std::slice::from_ref(&current_frame_data.after_exec_fence));
+
+            let wait_semaphore_submit_info = vk::SemaphoreSubmitInfoKHR::builder()
+                .semaphore(self.semaphores[0])
+                .stage_mask(vk::PipelineStageFlags2KHR::COLOR_ATTACHMENT_OUTPUT)
+                .device_index(0);
+            let command_submit_info = vk::CommandBufferSubmitInfoKHR::builder()
+                .command_buffer(current_frame_data.main_command.buffers[res.0 as usize])
+                .device_mask(0);
+            let signal_semaphore_submit_info = vk::SemaphoreSubmitInfoKHR::builder()
+                .semaphore(self.semaphores[1])
+                .stage_mask(vk::PipelineStageFlags2KHR::ALL_COMMANDS)
+                .device_index(0);
+            let submit_info = vk::SubmitInfo2KHR::builder()
+                .wait_semaphore_infos(std::slice::from_ref(&wait_semaphore_submit_info))
+                .command_buffer_infos(std::slice::from_ref(&command_submit_info))
+                .signal_semaphore_infos(std::slice::from_ref(&signal_semaphore_submit_info))
+                .build();
+            self.sync2.queue_submit2(self.bvk.queues[0], std::slice::from_ref(&submit_info), current_frame_data.after_exec_fence);
+
+            let present_info = vk::PresentInfoKHR::builder()
+                .wait_semaphores(std::slice::from_ref(&self.semaphores[1]))
+                .swapchains(std::slice::from_ref(&self.bvk.swapchain))
+                .image_indices(std::slice::from_ref(&res.0));
+            self.bvk.swapchain_fn.as_ref().unwrap().queue_present(self.bvk.queues[0], &present_info);
+            self.frames_count += 1;
+        }
+    }
 }
 
 impl Drop for GraphVk {
     fn drop(&mut self) {
+        unsafe { self.bvk.device.device_wait_idle() };
+        self.bvk.destroy_semaphores(&self.semaphores);
+        self.frames_data.iter().for_each(|frame_data| {
+            unsafe { self.bvk.device.destroy_fence(frame_data.after_exec_fence, None) };
+            self.bvk.destroy_cmd_pool_and_buffers(&frame_data.main_command);
+        });
+
         self.bvk.destroy_buffer(&self.host_curve_buffer);
         self.bvk.destroy_buffer(&self.device_curve_buffer);
 
-        for framebuffer in self.framebuffers.iter() {
+        self.framebuffers.iter().for_each(|framebuffer| {
             unsafe {
                 self.bvk.device.destroy_framebuffer(*framebuffer, None);
             }
-        }
+        });
         unsafe {
             self.bvk
                 .device

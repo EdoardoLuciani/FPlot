@@ -6,13 +6,14 @@ use std::borrow::Borrow;
 use std::collections::HashSet;
 use std::ffi::{CStr, CString};
 use std::mem::ManuallyDrop;
+use std::os::raw::c_char;
 
 use raw_window_handle::RawWindowHandle;
 use winit::event::VirtualKeyCode::Comma;
 
 pub struct BaseVk {
     entry_fn: ash::Entry,
-    instance: ash::Instance,
+    pub instance: ash::Instance,
     debug_utils_fn: Option<ext::DebugUtils>,
     debug_utils_messenger: vk::DebugUtilsMessengerEXT,
     surface: vk::SurfaceKHR,
@@ -20,6 +21,7 @@ pub struct BaseVk {
     physical_device: vk::PhysicalDevice,
     queue_family_index: u32,
     pub device: ash::Device,
+    pub queues: Vec<vk::Queue>,
     pub swapchain_fn: Option<khr::Swapchain>,
     pub swapchain_create_info: Option<vk::SwapchainCreateInfoKHR>,
     pub swapchain: vk::SwapchainKHR,
@@ -79,7 +81,7 @@ impl BaseVk {
             layer_names.push(
                 CStr::from_bytes_with_nul(b"VK_LAYER_KHRONOS_validation\0")
                     .unwrap()
-                    .as_ptr(),
+                    .as_ptr()
             );
             instance_extensions.push(CString::new("VK_EXT_debug_utils").unwrap());
         }
@@ -127,7 +129,8 @@ impl BaseVk {
                 .message_severity(
                     vk::DebugUtilsMessageSeverityFlagsEXT::INFO
                         | vk::DebugUtilsMessageSeverityFlagsEXT::WARNING
-                        | vk::DebugUtilsMessageSeverityFlagsEXT::ERROR,
+                        | vk::DebugUtilsMessageSeverityFlagsEXT::ERROR
+                        | vk::DebugUtilsMessageSeverityFlagsEXT::VERBOSE,
                 )
                 .message_type(
                     vk::DebugUtilsMessageTypeFlagsEXT::VALIDATION
@@ -222,6 +225,7 @@ impl BaseVk {
                         *physical_device,
                         &mut available_device_features,
                     );
+                    available_device_features.features.robust_buffer_access = 300;
                     if !compare_vk_physical_device_features2(
                         &available_device_features,
                         desired_physical_device_features2,
@@ -313,6 +317,13 @@ impl BaseVk {
             swapchain_fn = Some(khr::Swapchain::new(&instance, &device));
         }
 
+        let mut queues = Vec::new();
+        for i in 0..desired_queues.len() as u32 {
+            queues.push(unsafe {
+                device.get_device_queue(selected_device.1, i)
+            });
+        }
+
         let allocator =
             gpu_allocator::vulkan::Allocator::new(&gpu_allocator::vulkan::AllocatorCreateDesc {
                 instance: instance.clone(),
@@ -333,6 +344,7 @@ impl BaseVk {
             physical_device: selected_device.0,
             queue_family_index: selected_device.1,
             device,
+            queues,
             swapchain_fn,
             swapchain_create_info: None,
             swapchain: vk::SwapchainKHR::null(),
@@ -531,11 +543,20 @@ impl BaseVk {
         CommandRecordInfo { pool, buffers }
     }
 
-    pub fn destroy_cmd_pool_and_buffers(&mut self, cmri: CommandRecordInfo) {
+    pub fn destroy_cmd_pool_and_buffers(&mut self, cmri: &CommandRecordInfo) {
         unsafe {
             self.device.free_command_buffers(cmri.pool, &cmri.buffers);
             self.device.destroy_command_pool(cmri.pool, None);
         }
+    }
+
+    pub fn create_semaphores(&mut self, count: u32) -> Vec<vk::Semaphore> {
+        let semaphore_create_info = vk::SemaphoreCreateInfo::builder();
+        (0..count).map(|_| unsafe {self.device.create_semaphore(&semaphore_create_info, None).unwrap()}).collect()
+    }
+
+    pub fn destroy_semaphores(&mut self, semaphores: &Vec<vk::Semaphore>) {
+        semaphores.iter().for_each(|s| unsafe { self.device.destroy_semaphore(*s, None) });
     }
 }
 

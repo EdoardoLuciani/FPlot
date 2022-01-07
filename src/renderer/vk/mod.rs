@@ -2,6 +2,7 @@ mod base_vk;
 pub mod graph_vk;
 mod pointer_chain_helpers;
 
+use std::ffi::CStr;
 use ash::vk;
 use std::fmt::Write;
 use std::fs::File;
@@ -20,8 +21,8 @@ unsafe extern "system" fn vk_debug_callback(
         message,
         "[{:?}][{:?}] : {:?}",
         (*p_callback_data).message_id_number,
-        (*p_callback_data).p_message_id_name,
-        (*p_callback_data).p_message
+        CStr::from_ptr((*p_callback_data).p_message_id_name),
+        CStr::from_ptr((*p_callback_data).p_message)
     )
     .unwrap();
     if message_severity.contains(vk::DebugUtilsMessageSeverityFlagsEXT::ERROR) {
