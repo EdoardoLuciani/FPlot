@@ -12,7 +12,7 @@ fn main() {
     std::env::set_var("WINIT_UNIX_BACKEND", "x11");
     let mut window = WindowManager::new((800u32, 800u32), None);
     let mut gvk = GraphVk::new((800u32, 800u32), window.get_window_handle());
-    gvk.fill_graph_buffer(|x| x);
+    gvk.fill_graph_buffer(|x| x*x);
     gvk.prepare();
     window.event_loop.run_return(|event, _, control_flow| {
         *control_flow = ControlFlow::Poll;

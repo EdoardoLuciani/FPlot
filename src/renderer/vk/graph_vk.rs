@@ -2,8 +2,9 @@ use std::borrow::{Borrow, BorrowMut};
 use super::base_vk::*;
 use ash::{extensions::*, vk};
 use std::ffi::CStr;
+use rand::distributions;
 use raw_window_handle::RawWindowHandle;
-use rand::distributions::{Distribution, Uniform};
+use rand::distributions::Distribution;
 
 struct FrameData {
     after_exec_fence: vk::Fence,
@@ -197,7 +198,7 @@ impl GraphVk {
 
         let pipeline_input_assembly_create_info =
             vk::PipelineInputAssemblyStateCreateInfo::builder()
-                .topology(vk::PrimitiveTopology::TRIANGLE_LIST)
+                .topology(vk::PrimitiveTopology::POINT_LIST)
                 .primitive_restart_enable(false);
 
         // Dummy values for viewport and scissor since they will be set using dynamic states
@@ -224,7 +225,7 @@ impl GraphVk {
             vk::PipelineRasterizationStateCreateInfo::builder()
                 .depth_clamp_enable(false)
                 .rasterizer_discard_enable(false)
-                .polygon_mode(vk::PolygonMode::FILL)
+                .polygon_mode(vk::PolygonMode::POINT)
                 .cull_mode(vk::CullModeFlags::NONE)
                 .front_face(vk::FrontFace::COUNTER_CLOCKWISE)
                 .depth_bias_enable(false)
@@ -236,6 +237,7 @@ impl GraphVk {
 
         let color_blend_attachment_state = vk::PipelineColorBlendAttachmentState::builder()
             .blend_enable(false)
+            .color_write_mask(vk::ColorComponentFlags::R | vk::ColorComponentFlags::G | vk::ColorComponentFlags::B | vk::ColorComponentFlags::A)
             .build();
         let pipeline_color_blend_state_create_info =
             vk::PipelineColorBlendStateCreateInfo::builder()
@@ -353,8 +355,7 @@ impl GraphVk {
                     .extent(self.bvk.swapchain_create_info.unwrap().image_extent);
                 self.bvk.device.cmd_set_scissor(*cmd_buf, 0, std::slice::from_ref(&scissor));
                 self.bvk.device.cmd_bind_vertex_buffers(*cmd_buf, 0, std::slice::from_ref(&self.device_curve_buffer.buffer), std::slice::from_ref(&0));
-                //self.bvk.device.cmd_draw(*cmd_buf, self.bvk.swapchain_create_info.unwrap().image_extent.width, 1, 0, 0);
-                self.bvk.device.cmd_draw(*cmd_buf, 3, 1, 0, 0);
+                self.bvk.device.cmd_draw(*cmd_buf, self.bvk.swapchain_create_info.unwrap().image_extent.width, 1, 0, 0);
                 self.bvk.device.cmd_end_render_pass(*cmd_buf);
                 self.bvk.device.end_command_buffer(*cmd_buf);
             }
@@ -366,35 +367,24 @@ impl GraphVk {
         let step = 2.0f32/self.bvk.swapchain_create_info.unwrap().image_extent.width as f32;
         let mut x = -1.0f32;
         let data_slice = unsafe { std::slice::from_raw_parts_mut(self.host_curve_buffer.allocation.mapped_ptr().unwrap().as_ptr() as *mut [f32; 2], self.bvk.swapchain_create_info.unwrap().image_extent.width as usize) };
-        let mut rng = rand::thread_rng();
-        let uniform_dist = Uniform::from(0.0f32..1.0f32);
         for i in 0..self.bvk.swapchain_create_info.unwrap().image_extent.width as usize {
-            /*
-            data_slice[i][0] = 0.0f32;
+            data_slice[i][0] = x;
             data_slice[i][1] = fun(x);
-            */
-            data_slice[i][0] = uniform_dist.sample(&mut rng);
-            data_slice[i][1] = uniform_dist.sample(&mut rng);
             x += step;
         }
     }
 
     pub fn prepare(&mut self) {
-        for i in 0..self.frames_data.len() {
-            self.record_static_command_buffers(&self.frames_data[i].main_command);
-        }
-        //self.frames_data.iter_mut().for_each(|e| self.record_static_command_buffers(&mut e.main_command));
+        self.frames_data.iter().for_each(|e| self.record_static_command_buffers(&e.main_command));
     }
 
     pub fn present_loop(&mut self, window: &winit::window::Window) {
         let current_frame_data = &self.frames_data[self.frames_count as usize % self.frames_data.len()];
         unsafe {
-            let res = self.bvk.swapchain_fn.as_ref().unwrap().acquire_next_image(self.bvk.swapchain, u64::MAX, self.semaphores[0], vk::Fence::null()).unwrap();
+            let res = self.bvk.swapchain_fn.as_ref().unwrap().acquire_next_image(self.bvk.swapchain, u64::MAX, self.semaphores[0], vk::Fence::null());
             // if the swapchain is suboptimal
-            if res.1 {
-                unsafe {
-                    self.bvk.device.device_wait_idle();
-                }
+            if res.is_err() || res.unwrap().1 {
+                self.bvk.device.device_wait_idle();
                 self.bvk.recreate_swapchain(
                     vk::PresentModeKHR::MAILBOX,
                     vk::Extent2D {
@@ -411,6 +401,7 @@ impl GraphVk {
                 self.prepare();
                 return
             }
+            let res = res.unwrap();
             self.bvk.device.wait_for_fences(std::slice::from_ref(&current_frame_data.after_exec_fence), false, u64::MAX);
             self.bvk.device.reset_fences(std::slice::from_ref(&current_frame_data.after_exec_fence));
 
@@ -437,6 +428,7 @@ impl GraphVk {
                 .swapchains(std::slice::from_ref(&self.bvk.swapchain))
                 .image_indices(std::slice::from_ref(&res.0));
             self.bvk.swapchain_fn.as_ref().unwrap().queue_present(self.bvk.queues[0], &present_info);
+
             self.frames_count += 1;
         }
     }
