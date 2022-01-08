@@ -136,9 +136,9 @@ impl GraphVk {
         }
     }
 
-    pub fn fill_graph_buffer(&mut self, fun : fn(f32) -> f32) {
-        let step = 2.0f32/self.bvk.swapchain_create_info.unwrap().image_extent.width as f32;
-        let mut x = -1.0f32;
+    pub fn fill_graph_buffer(&mut self, x_start: f32, x_end: f32, fun : fn(f32) -> f32) {
+        let step = ((x_end - x_start).abs())/self.bvk.swapchain_create_info.unwrap().image_extent.width as f32;
+        let mut x = x_start;
         let data_slice = unsafe { std::slice::from_raw_parts_mut(self.host_curve_buffer.allocation.mapped_ptr().unwrap().as_ptr() as *mut [f32; 2], self.bvk.swapchain_create_info.unwrap().image_extent.width as usize) };
         for i in 0..self.bvk.swapchain_create_info.unwrap().image_extent.width as usize {
             data_slice[i][0] = x;
@@ -252,7 +252,7 @@ impl GraphVk {
 
         let pipeline_input_assembly_create_info =
             vk::PipelineInputAssemblyStateCreateInfo::builder()
-                .topology(vk::PrimitiveTopology::POINT_LIST)
+                .topology(vk::PrimitiveTopology::LINE_STRIP)
                 .primitive_restart_enable(false);
 
         // Dummy values for viewport and scissor since they will be set using dynamic states
@@ -279,7 +279,7 @@ impl GraphVk {
             vk::PipelineRasterizationStateCreateInfo::builder()
                 .depth_clamp_enable(false)
                 .rasterizer_discard_enable(false)
-                .polygon_mode(vk::PolygonMode::POINT)
+                .polygon_mode(vk::PolygonMode::LINE)
                 .cull_mode(vk::CullModeFlags::NONE)
                 .front_face(vk::FrontFace::COUNTER_CLOCKWISE)
                 .depth_bias_enable(false)
