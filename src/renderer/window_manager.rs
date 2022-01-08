@@ -1,8 +1,6 @@
 use raw_window_handle::{HasRawWindowHandle, RawWindowHandle};
 use winit::dpi::LogicalSize;
-use winit::event::{Event, WindowEvent};
-use winit::event_loop::{ControlFlow, EventLoop};
-use winit::platform::run_return::EventLoopExtRunReturn;
+use winit::event_loop::EventLoop;
 use winit::window::Fullscreen;
 use winit::*;
 

@@ -2,7 +2,7 @@ use ash::vk;
 use std::alloc::Layout;
 use std::ffi::c_void;
 use std::mem::size_of;
-use std::ptr::{addr_of, null_mut};
+use std::ptr::null_mut;
 
 pub unsafe fn clone_vk_physical_device_features2_structure(
     source: &vk::PhysicalDeviceFeatures2,
