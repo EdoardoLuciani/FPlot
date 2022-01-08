@@ -1,11 +1,10 @@
 use std::borrow::{Borrow, BorrowMut};
-use std::collections::HashMap;
 use super::base_vk::*;
 use ash::{extensions::*, vk};
 use std::ffi::CStr;
 use gpu_allocator::MemoryLocation;
-use nalgebra::*;
 use raw_window_handle::RawWindowHandle;
+use nalgebra::*;
 
 struct FrameData {
     after_exec_fence: vk::Fence,
@@ -149,7 +148,7 @@ impl GraphVk {
 
     pub fn set_position(&mut self, position: &Vector3<f32>) {
         let dst_ptr = std::ptr::slice_from_raw_parts_mut(self.transform_uniform_buffer.allocation.mapped_ptr().unwrap().as_ptr() as *mut f32,
-                                               self.transform_uniform_buffer.allocation.size() as usize /std::mem::size_of::<f32>());
+                                               self.transform_uniform_buffer.allocation.size() as usize / std::mem::size_of::<f32>());
         let mat = Matrix4::<f32>::new_translation(position);
         unsafe {
             (*dst_ptr).copy_from_slice(mat.data.as_slice());
