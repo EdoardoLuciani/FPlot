@@ -11,29 +11,30 @@ pub unsafe fn clone_vk_physical_device_features2_structure(
 
     let mut source_ptr = source.p_next;
     let mut dst_ptr = &mut (ret_val.p_next);
+
+    macro_rules! allocate_struct {
+        ($struct_identifier:expr, $struct_type:ty) => {{
+            let cloned_child_struct_ptr = std::alloc::alloc(Layout::new::<$struct_type>());
+            (*(cloned_child_struct_ptr as *mut $struct_type)).s_type = $struct_identifier;
+            cloned_child_struct_ptr
+        }};
+    }
     while !source_ptr.is_null() {
-        let cloned_child_struct_ptr;
-        match (*(source_ptr as *const vk::PhysicalDeviceFeatures2)).s_type {
-            vk::StructureType::PHYSICAL_DEVICE_VULKAN_1_1_FEATURES => {
-                let lay = Layout::new::<vk::PhysicalDeviceVulkan11Features>();
-                cloned_child_struct_ptr = std::alloc::alloc(lay);
-                (*(cloned_child_struct_ptr as *mut vk::PhysicalDeviceVulkan11Features)).s_type =
-                    vk::StructureType::PHYSICAL_DEVICE_VULKAN_1_1_FEATURES;
-            }
-            vk::StructureType::PHYSICAL_DEVICE_DESCRIPTOR_INDEXING_FEATURES_EXT => {
-                let lay = Layout::new::<vk::PhysicalDeviceDescriptorIndexingFeaturesEXT>();
-                cloned_child_struct_ptr = std::alloc::alloc(lay);
-                (*(cloned_child_struct_ptr as *mut vk::PhysicalDeviceVulkan11Features)).s_type =
-                    vk::StructureType::PHYSICAL_DEVICE_DESCRIPTOR_INDEXING_FEATURES_EXT;
-            }
-            vk::StructureType::PHYSICAL_DEVICE_SYNCHRONIZATION_2_FEATURES_KHR => {
-                let lay = Layout::new::<vk::PhysicalDeviceSynchronization2FeaturesKHR>();
-                cloned_child_struct_ptr = std::alloc::alloc(lay);
-                (*(cloned_child_struct_ptr as *mut vk::PhysicalDeviceVulkan11Features)).s_type =
-                    vk::StructureType::PHYSICAL_DEVICE_SYNCHRONIZATION_2_FEATURES_KHR;
-            }
-            _ => panic!("Found unrecognized struct inside clone_vkPhysicalDeviceFeatures2"),
-        }
+        let cloned_child_struct_ptr = match (*(source_ptr as *const vk::PhysicalDeviceFeatures2)).s_type {
+            vk::StructureType::PHYSICAL_DEVICE_VULKAN_1_1_FEATURES =>
+                allocate_struct!(vk::StructureType::PHYSICAL_DEVICE_VULKAN_1_1_FEATURES,
+                    vk::PhysicalDeviceVulkan11Features),
+            vk::StructureType::PHYSICAL_DEVICE_DESCRIPTOR_INDEXING_FEATURES_EXT =>
+                allocate_struct!(vk::StructureType::PHYSICAL_DEVICE_DESCRIPTOR_INDEXING_FEATURES_EXT,
+                    vk::PhysicalDeviceDescriptorIndexingFeatures),
+            vk::StructureType::PHYSICAL_DEVICE_SYNCHRONIZATION_2_FEATURES_KHR =>
+                allocate_struct!(vk::StructureType::PHYSICAL_DEVICE_SYNCHRONIZATION_2_FEATURES_KHR,
+                    vk::PhysicalDeviceSynchronization2FeaturesKHR),
+            vk::StructureType::PHYSICAL_DEVICE_IMAGELESS_FRAMEBUFFER_FEATURES =>
+                allocate_struct!(vk::StructureType::PHYSICAL_DEVICE_IMAGELESS_FRAMEBUFFER_FEATURES,
+                    vk::PhysicalDeviceImagelessFramebufferFeatures),
+            _ => {panic!("Found unrecognized struct inside clone_vkPhysicalDeviceFeatures2")},
+        };
         (*(cloned_child_struct_ptr as *mut vk::PhysicalDeviceVulkan11Features)).p_next = null_mut();
         *dst_ptr = cloned_child_struct_ptr as *mut c_void;
         dst_ptr = &mut ((*((*dst_ptr) as *mut vk::PhysicalDeviceFeatures2)).p_next);
@@ -44,32 +45,30 @@ pub unsafe fn clone_vk_physical_device_features2_structure(
 
 pub unsafe fn destroy_vk_physical_device_features2(source: &mut vk::PhysicalDeviceFeatures2) {
     let mut p_next = source.p_next;
-    let mut p_next_tmp;
+
+    macro_rules! free_struct_and_advance {
+        ($struct_type:ty) => {{
+            let p_next_tmp = p_next;
+            p_next = (*(p_next as *const $struct_type)).p_next;
+            std::alloc::dealloc(
+                p_next_tmp as *mut u8,
+                Layout::new::<$struct_type>(),
+            );
+        }};
+    }
     while !p_next.is_null() {
         match (*(p_next as *const vk::PhysicalDeviceFeatures2)).s_type {
             vk::StructureType::PHYSICAL_DEVICE_VULKAN_1_1_FEATURES => {
-                p_next_tmp = p_next;
-                p_next = (*(p_next as *const vk::PhysicalDeviceFeatures2)).p_next;
-                std::alloc::dealloc(
-                    p_next_tmp as *mut u8,
-                    Layout::new::<vk::PhysicalDeviceVulkan11Features>(),
-                );
+                free_struct_and_advance!(vk::PhysicalDeviceVulkan11Features);
             }
             vk::StructureType::PHYSICAL_DEVICE_DESCRIPTOR_INDEXING_FEATURES_EXT => {
-                p_next_tmp = p_next;
-                p_next = (*(p_next as *const vk::PhysicalDeviceFeatures2)).p_next;
-                std::alloc::dealloc(
-                    p_next_tmp as *mut u8,
-                    Layout::new::<vk::PhysicalDeviceDescriptorIndexingFeaturesEXT>(),
-                );
+                free_struct_and_advance!(vk::PhysicalDeviceDescriptorIndexingFeaturesEXT);
             }
             vk::StructureType::PHYSICAL_DEVICE_SYNCHRONIZATION_2_FEATURES_KHR => {
-                p_next_tmp = p_next;
-                p_next = (*(p_next as *const vk::PhysicalDeviceFeatures2)).p_next;
-                std::alloc::dealloc(
-                    p_next_tmp as *mut u8,
-                    Layout::new::<vk::PhysicalDeviceSynchronization2FeaturesKHR>(),
-                );
+                free_struct_and_advance!(vk::PhysicalDeviceSynchronization2FeaturesKHR);
+            }
+            vk::StructureType::PHYSICAL_DEVICE_IMAGELESS_FRAMEBUFFER_FEATURES => {
+                free_struct_and_advance!(vk::PhysicalDeviceImagelessFramebufferFeatures);
             }
             _ => panic!("Found unrecognized struct inside destroy_vk_physical_device_features2"),
         }
@@ -142,6 +141,13 @@ pub unsafe fn compare_vk_physical_device_features2(
                     baseline_ptr,
                     desired_ptr,
                     size_of::<vk::PhysicalDeviceSynchronization2FeaturesKHR>(),
+                );
+            }
+            vk::StructureType::PHYSICAL_DEVICE_IMAGELESS_FRAMEBUFFER_FEATURES => {
+                res = compare_device_features_structs(
+                    baseline_ptr,
+                    desired_ptr,
+                    size_of::<vk::PhysicalDeviceImagelessFramebufferFeatures>(),
                 );
             }
             _ => panic!("Found unrecognized struct inside compare_vk_physical_device_features2"),

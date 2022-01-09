@@ -2,8 +2,8 @@ mod base_vk;
 pub mod graph_vk;
 mod pointer_chain_helpers;
 
-use std::ffi::CStr;
 use ash::vk;
+use std::ffi::CStr;
 use std::fmt::Write;
 use std::fs::File;
 use std::io::Read;

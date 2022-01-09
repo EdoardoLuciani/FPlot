@@ -85,7 +85,7 @@ impl BaseVk {
             layer_names.push(
                 CStr::from_bytes_with_nul(b"VK_LAYER_KHRONOS_validation\0")
                     .unwrap()
-                    .as_ptr()
+                    .as_ptr(),
             );
             instance_extensions.push(CString::new("VK_EXT_debug_utils").unwrap());
         }
@@ -323,9 +323,7 @@ impl BaseVk {
 
         let mut queues = Vec::new();
         for i in 0..desired_queues.len() as u32 {
-            queues.push(unsafe {
-                device.get_device_queue(selected_device.1, i)
-            });
+            queues.push(unsafe { device.get_device_queue(selected_device.1, i) });
         }
 
         let allocator =
@@ -459,10 +457,11 @@ impl BaseVk {
                 .expect("Could not create swapchain");
 
             if let Some(swapchain_image_views) = &mut self.swapchain_image_views {
-                swapchain_image_views.iter().for_each(|siv| self.device.destroy_image_view(*siv, None));
+                swapchain_image_views
+                    .iter()
+                    .for_each(|siv| self.device.destroy_image_view(*siv, None));
                 swapchain_image_views.clear();
-            }
-            else {
+            } else {
                 self.swapchain_image_views = Some(Vec::new());
             }
 
@@ -561,20 +560,31 @@ impl BaseVk {
         }
     }
 
-    pub fn create_descriptor_pool_and_sets(&mut self, pool_sizes: &[vk::DescriptorPoolSize], sets: &[vk::DescriptorSetLayout]) -> DescriptorInfo {
+    pub fn create_descriptor_pool_and_sets(
+        &mut self,
+        pool_sizes: &[vk::DescriptorPoolSize],
+        sets: &[vk::DescriptorSetLayout],
+    ) -> DescriptorInfo {
         let descriptor_pool_create_info = vk::DescriptorPoolCreateInfo::builder()
             .max_sets(sets.len() as u32)
             .pool_sizes(&pool_sizes);
         let descriptor_pool = unsafe {
-            self.device.create_descriptor_pool(&descriptor_pool_create_info, None).unwrap()
+            self.device
+                .create_descriptor_pool(&descriptor_pool_create_info, None)
+                .unwrap()
         };
         let descriptor_set_allocate_info = vk::DescriptorSetAllocateInfo::builder()
             .descriptor_pool(descriptor_pool)
             .set_layouts(sets);
         let descriptor_sets = unsafe {
-            self.device.allocate_descriptor_sets(&descriptor_set_allocate_info).unwrap()
+            self.device
+                .allocate_descriptor_sets(&descriptor_set_allocate_info)
+                .unwrap()
         };
-        DescriptorInfo { pool: descriptor_pool, buffers: descriptor_sets }
+        DescriptorInfo {
+            pool: descriptor_pool,
+            buffers: descriptor_sets,
+        }
     }
 
     pub fn destroy_descriptor_pool_and_sets(&mut self, di: &DescriptorInfo) {
@@ -585,11 +595,19 @@ impl BaseVk {
 
     pub fn create_semaphores(&mut self, count: u32) -> Vec<vk::Semaphore> {
         let semaphore_create_info = vk::SemaphoreCreateInfo::builder();
-        (0..count).map(|_| unsafe {self.device.create_semaphore(&semaphore_create_info, None).unwrap()}).collect()
+        (0..count)
+            .map(|_| unsafe {
+                self.device
+                    .create_semaphore(&semaphore_create_info, None)
+                    .unwrap()
+            })
+            .collect()
     }
 
     pub fn destroy_semaphores(&mut self, semaphores: &Vec<vk::Semaphore>) {
-        semaphores.iter().for_each(|s| unsafe { self.device.destroy_semaphore(*s, None) });
+        semaphores
+            .iter()
+            .for_each(|s| unsafe { self.device.destroy_semaphore(*s, None) });
     }
 }
 
