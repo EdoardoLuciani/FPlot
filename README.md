@@ -1,7 +1,7 @@
 # FPlot
 FPlot is a simple function visilizer. As of now, it is simply a toy project that I used to learn vulkan and window management for Rust and is not intended to be maintained. I decided to opensource it so it can be used as a reference.
 
-![alt text](https://github.com/EdoardoLuciani/FPlot/img.png)
+![alt text](https://github.com/EdoardoLuciani/FPlot/blob/main/image.png)
 
 ## Features
 - Window panning, zoom
@@ -13,3 +13,6 @@ FPlot is a simple function visilizer. As of now, it is simply a toy project that
 
 ## How to build
 The project can be built on any supported platform with cargo but it also requires the Vulkan SDK installation (https://vulkan.lunarg.com/). Important note is that the environment variables that the SDK provides (VULKAN_SDK, PATH, LD_LIBRARY_PATH, VK_LAYER_PATH) needs to be set as they are used by the various dependencies of FPlot.
+
+## License
+See [LICENSE](https://github.com/EdoardoLuciani/FPlot/blob/main/LICENSE)
