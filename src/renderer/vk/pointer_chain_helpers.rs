@@ -55,23 +55,24 @@ pub unsafe fn destroy_vk_physical_device_features2(source: &mut vk::PhysicalDevi
                 Layout::new::<$struct_type>(),
             );
         }};
+
+        (match $s_type:expr; {
+            $( $feature:pat => $struct_type:ty ),*
+            $(,)?
+        }) => {
+            match $s_type {
+                $( $feature => free_struct_and_advance!($struct_type), )*
+                _ => panic!("Found unrecognized struct inside destroy_vk_physical_device_features2"),
+            }
+        }
     }
     while !p_next.is_null() {
-        match (*(p_next as *const vk::PhysicalDeviceFeatures2)).s_type {
-            vk::StructureType::PHYSICAL_DEVICE_VULKAN_1_1_FEATURES => {
-                free_struct_and_advance!(vk::PhysicalDeviceVulkan11Features);
-            }
-            vk::StructureType::PHYSICAL_DEVICE_DESCRIPTOR_INDEXING_FEATURES_EXT => {
-                free_struct_and_advance!(vk::PhysicalDeviceDescriptorIndexingFeaturesEXT);
-            }
-            vk::StructureType::PHYSICAL_DEVICE_SYNCHRONIZATION_2_FEATURES_KHR => {
-                free_struct_and_advance!(vk::PhysicalDeviceSynchronization2FeaturesKHR);
-            }
-            vk::StructureType::PHYSICAL_DEVICE_IMAGELESS_FRAMEBUFFER_FEATURES => {
-                free_struct_and_advance!(vk::PhysicalDeviceImagelessFramebufferFeatures);
-            }
-            _ => panic!("Found unrecognized struct inside destroy_vk_physical_device_features2"),
-        }
+        free_struct_and_advance!(match (*(p_next as *const vk::PhysicalDeviceFeatures2)).s_type; {
+            PHYSICAL_DEVICE_VULKAN_1_1_FEATURES => vk::PhysicalDeviceVulkan11Features,
+            PHYSICAL_DEVICE_DESCRIPTOR_INDEXING_FEATURES_EXT => vk::PhysicalDeviceDescriptorIndexingFeaturesEXT,
+            PHYSICAL_DEVICE_SYNCHRONIZATION_2_FEATURES_KHR => vk::PhysicalDeviceSynchronization2FeaturesKHR,
+            PHYSICAL_DEVICE_IMAGELESS_FRAMEBUFFER_FEATURES => vk::PhysicalDeviceImagelessFramebufferFeatures,
+        });
     }
     source.p_next = null_mut();
 }

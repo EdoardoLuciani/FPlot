@@ -2,7 +2,6 @@ mod renderer;
 
 use crate::renderer::window_manager::WindowManager;
 use renderer::vk::graph_vk::GraphVk;
-use std::time::{Duration, Instant};
 
 use winit::dpi::PhysicalPosition;
 use winit::event::*;
@@ -94,8 +93,8 @@ fn main() {
                     last_mouse_pressed_pos = Some(pos);
                 }
                 WindowEvent::MouseWheel { delta: val, .. } => {
-                    if let LineDelta(x, y) = val {
-                        zoom += (y * 0.1f32 * zoom);
+                    if let LineDelta(_, y) = val {
+                        zoom += y * 0.1f32 * zoom;
                         window.window.request_redraw();
                     }
                 }

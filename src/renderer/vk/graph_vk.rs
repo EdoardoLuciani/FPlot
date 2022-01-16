@@ -3,7 +3,6 @@ use ash::{extensions::*, vk};
 use gpu_allocator::MemoryLocation;
 use nalgebra::*;
 use raw_window_handle::RawWindowHandle;
-use std::borrow::{Borrow, BorrowMut};
 use std::ffi::CStr;
 use std::mem::size_of;
 
@@ -137,7 +136,7 @@ impl GraphVk {
     }
 
     fn recreate_curve_vertex_buffers(&mut self, points: usize) {
-        let size = ((points + 4) * (2 * std::mem::size_of::<f32>()));
+        let size = (points + 4) * (2 * std::mem::size_of::<f32>());
         if size > self.host_curve_buffer.allocation.size() as usize {
             self.bvk.destroy_buffer(&self.host_curve_buffer);
             self.bvk.destroy_buffer(&self.device_curve_buffer);
@@ -154,12 +153,12 @@ impl GraphVk {
         let mut x = x_start;
         let data_slice = unsafe {
             std::slice::from_raw_parts_mut(
-                (self
+                self
                     .host_curve_buffer
                     .allocation
                     .mapped_ptr()
                     .unwrap()
-                    .as_ptr() as *mut [f32; 2]),
+                    .as_ptr() as *mut [f32; 2],
                 self.host_curve_buffer.allocation.size() as usize / std::mem::size_of::<[f32; 2]>(),
             )
         };
@@ -180,12 +179,12 @@ impl GraphVk {
     pub fn set_transform(&mut self, position: &Vector3<f32>, scale: f32) {
         let data_slice = unsafe {
             std::slice::from_raw_parts_mut(
-                (self
+                self
                     .host_curve_buffer
                     .allocation
                     .mapped_ptr()
                     .unwrap()
-                    .as_ptr() as *mut [f32; 2]),
+                    .as_ptr() as *mut [f32; 2],
                 self.host_curve_buffer.allocation.size() as usize / std::mem::size_of::<[f32; 2]>(),
             )
         };
@@ -468,14 +467,16 @@ impl GraphVk {
         unsafe {
             self.bvk
                 .device
-                .reset_command_pool(cmri.pool, vk::CommandPoolResetFlags::empty());
+                .reset_command_pool(cmri.pool, vk::CommandPoolResetFlags::empty())
+                .unwrap();
         }
         for (i, cmd_buf) in cmri.buffers.iter().enumerate() {
             let command_buffer_begin_info = vk::CommandBufferBeginInfo::default();
             unsafe {
                 self.bvk
                     .device
-                    .begin_command_buffer(*cmd_buf, &command_buffer_begin_info);
+                    .begin_command_buffer(*cmd_buf, &command_buffer_begin_info)
+                    .unwrap();
                 let region = vk::BufferCopy::builder()
                     .src_offset(0)
                     .dst_offset(0)
@@ -556,7 +557,7 @@ impl GraphVk {
                     std::slice::from_ref(&0),
                 );
                 // Drawing of the axes
-                let mut axes_color = Vector4::<f32>::new(1.0, 0.0, 0.0, 0.0);
+                let axes_color = Vector4::<f32>::new(1.0, 0.0, 0.0, 0.0);
                 self.bvk.device.cmd_push_constants(
                     *cmd_buf,
                     self.pipeline_layout,
@@ -567,7 +568,7 @@ impl GraphVk {
                 self.bvk.device.cmd_draw(*cmd_buf, 2, 1, 0, 0);
                 self.bvk.device.cmd_draw(*cmd_buf, 2, 1, 2, 0);
                 // Drawing of the function
-                let mut function_color = Vector4::<f32>::new(1.0, 1.0, 1.0, 0.0);
+                let function_color = Vector4::<f32>::new(1.0, 1.0, 1.0, 0.0);
                 self.bvk.device.cmd_push_constants(
                     *cmd_buf,
                     self.pipeline_layout,
@@ -583,7 +584,7 @@ impl GraphVk {
                     0,
                 );
                 self.bvk.device.cmd_end_render_pass(*cmd_buf);
-                self.bvk.device.end_command_buffer(*cmd_buf);
+                self.bvk.device.end_command_buffer(*cmd_buf).unwrap();
             }
         }
     }
@@ -613,7 +614,7 @@ impl GraphVk {
                         color_space: self.bvk.swapchain_create_info.unwrap().image_color_space,
                     },
                 );
-                unsafe { self.bvk.device.destroy_framebuffer(self.framebuffer, None) };
+                self.bvk.device.destroy_framebuffer(self.framebuffer, None);
                 self.framebuffer = Self::create_framebuffer(&self.bvk, self.renderpass);
                 self.recreate_curve_vertex_buffers(window.inner_size().width as usize);
                 self.prepare();
@@ -649,7 +650,7 @@ impl GraphVk {
                 self.bvk.queues[0],
                 std::slice::from_ref(&submit_info),
                 current_frame_data.after_exec_fence,
-            );
+            ).expect("Error submitting queue");
 
             let present_info = vk::PresentInfoKHR::builder()
                 .wait_semaphores(std::slice::from_ref(&self.semaphores[1]))
@@ -669,7 +670,7 @@ impl GraphVk {
 impl Drop for GraphVk {
     fn drop(&mut self) {
         unsafe {
-            self.bvk.device.device_wait_idle();
+            self.bvk.device.device_wait_idle().unwrap();
             self.bvk
                 .device
                 .destroy_descriptor_set_layout(self.descriptor_set_layout, None);
