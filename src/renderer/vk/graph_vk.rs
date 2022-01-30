@@ -30,8 +30,8 @@ pub struct GraphVk {
 
 impl GraphVk {
     pub fn new(window_size: (u32, u32), window_handle: RawWindowHandle) -> Self {
-        let mut imageless_fb = vk::PhysicalDeviceImagelessFramebufferFeatures::builder()
-            .imageless_framebuffer(true);
+        let mut imageless_fb =
+            vk::PhysicalDeviceImagelessFramebufferFeatures::builder().imageless_framebuffer(true);
         let mut sync2 =
             vk::PhysicalDeviceSynchronization2FeaturesKHR::builder().synchronization2(true);
         let mut desired_features = vk::PhysicalDeviceFeatures2::builder()
@@ -41,7 +41,11 @@ impl GraphVk {
         let mut base_vk = BaseVk::new(
             "FPlot",
             &[],
-            &["VK_KHR_synchronization2", "VK_KHR_imageless_framebuffer", "VK_KHR_image_format_list"],
+            &[
+                "VK_KHR_synchronization2",
+                "VK_KHR_imageless_framebuffer",
+                "VK_KHR_image_format_list",
+            ],
             &desired_features,
             std::slice::from_ref(&(vk::QueueFlags::GRAPHICS, 1.0f32)),
             Some(window_handle),
@@ -67,11 +71,11 @@ impl GraphVk {
         let transform_uniform_buffer =
             base_vk.allocate_buffer(&buffer_create_info, MemoryLocation::CpuToGpu);
 
-        let renderpass = Self::create_renderpass(&mut base_vk);
+        let renderpass = Self::create_renderpass(&base_vk);
         let (descriptor_set_layout, descriptor_pool_size) =
-            Self::create_descriptor_set_layout(&mut base_vk);
+            Self::create_descriptor_set_layout(&base_vk);
         let pipeline_data = Self::create_graph_pipeline(
-            &mut base_vk,
+            &base_vk,
             std::path::Path::new("assets/shaders-spirv"),
             renderpass,
             descriptor_set_layout,
@@ -80,7 +84,7 @@ impl GraphVk {
             std::slice::from_ref(&descriptor_pool_size),
             std::slice::from_ref(&descriptor_set_layout),
         );
-        let framebuffer = Self::create_framebuffer(&mut base_vk, renderpass);
+        let framebuffer = Self::create_framebuffer(&base_vk, renderpass);
         let semaphores = base_vk.create_semaphores(2);
 
         let fence_create_info =
@@ -119,13 +123,19 @@ impl GraphVk {
     }
 
     fn get_required_vertex_buffer_size(bvk: &BaseVk) -> usize {
-        (bvk.swapchain_create_info.as_ref().unwrap().image_extent.width as usize + 4) * (2 * std::mem::size_of::<f32>())
+        (bvk.swapchain_create_info
+            .as_ref()
+            .unwrap()
+            .image_extent
+            .width as usize
+            + 4)
+            * (2 * std::mem::size_of::<f32>())
     }
 
     fn create_curve_vertex_buffers(bvk: &mut BaseVk) -> [BufferAllocation; 2] {
         // The size required for the buffers is calculated as the size of the points and the axes
         let mut buffer_create_info = vk::BufferCreateInfo::builder()
-            .size(Self::get_required_vertex_buffer_size(&bvk) as u64)
+            .size(Self::get_required_vertex_buffer_size(bvk) as u64)
             .usage(vk::BufferUsageFlags::TRANSFER_SRC)
             .sharing_mode(vk::SharingMode::EXCLUSIVE)
             .build();
@@ -140,7 +150,9 @@ impl GraphVk {
     }
 
     fn recreate_curve_vertex_buffers(&mut self) {
-        if Self::get_required_vertex_buffer_size(&self.bvk) > self.host_curve_buffer.allocation.size() as usize {
+        if Self::get_required_vertex_buffer_size(&self.bvk)
+            > self.host_curve_buffer.allocation.size() as usize
+        {
             self.bvk.destroy_buffer(&self.host_curve_buffer);
             self.bvk.destroy_buffer(&self.device_curve_buffer);
 
@@ -156,8 +168,7 @@ impl GraphVk {
         let mut x = x_start;
         let data_slice = unsafe {
             std::slice::from_raw_parts_mut(
-                self
-                    .host_curve_buffer
+                self.host_curve_buffer
                     .allocation
                     .mapped_ptr()
                     .unwrap()
@@ -172,9 +183,9 @@ impl GraphVk {
         data_slice[1][0] = x_end;
         data_slice[1][1] = 0.0f32;
 
-        for i in 4..(self.bvk.swapchain_create_info.unwrap().image_extent.width + 4) as usize {
-            data_slice[i][0] = x;
-            data_slice[i][1] = fun(x);
+        for data in data_slice.iter_mut().skip(4) {
+            data[0] = x;
+            data[1] = fun(x);
             x += step;
         }
     }
@@ -182,8 +193,7 @@ impl GraphVk {
     pub fn set_transform(&mut self, position: &Vector3<f32>, scale: f32) {
         let data_slice = unsafe {
             std::slice::from_raw_parts_mut(
-                self
-                    .host_curve_buffer
+                self.host_curve_buffer
                     .allocation
                     .mapped_ptr()
                     .unwrap()
@@ -423,9 +433,12 @@ impl GraphVk {
             .width(bvk.swapchain_create_info.unwrap().image_extent.width)
             .height(bvk.swapchain_create_info.unwrap().image_extent.height)
             .layer_count(1)
-            .view_formats(std::slice::from_ref(&bvk.swapchain_create_info.as_ref().unwrap().image_format));
-        let mut framebuffer_attachments_create_info = vk::FramebufferAttachmentsCreateInfoKHR::builder()
-            .attachment_image_infos(std::slice::from_ref(&framebuffer_attachments_image_info));
+            .view_formats(std::slice::from_ref(
+                &bvk.swapchain_create_info.as_ref().unwrap().image_format,
+            ));
+        let mut framebuffer_attachments_create_info =
+            vk::FramebufferAttachmentsCreateInfoKHR::builder()
+                .attachment_image_infos(std::slice::from_ref(&framebuffer_attachments_image_info));
         let mut framebuffer_create_info = vk::FramebufferCreateInfo::builder()
             .push_next(&mut framebuffer_attachments_create_info)
             .flags(vk::FramebufferCreateFlags::IMAGELESS_KHR)
@@ -437,8 +450,8 @@ impl GraphVk {
         framebuffer_create_info.attachment_count = 1;
         unsafe {
             bvk.device
-               .create_framebuffer(&framebuffer_create_info, None)
-               .unwrap()
+                .create_framebuffer(&framebuffer_create_info, None)
+                .unwrap()
         }
     }
 
@@ -502,12 +515,14 @@ impl GraphVk {
                     .buffer(self.device_curve_buffer.buffer)
                     .offset(0)
                     .size(vk::WHOLE_SIZE);
-                let dependancy_info = vk::DependencyInfoKHR::builder()
+                let dependency_info = vk::DependencyInfoKHR::builder()
                     .buffer_memory_barriers(std::slice::from_ref(&buffer_memory_barrier));
-                self.sync2.cmd_pipeline_barrier2(*cmd_buf, &dependancy_info);
+                self.sync2.cmd_pipeline_barrier2(*cmd_buf, &dependency_info);
 
-                let mut renderpass_attachment_begin_info = vk::RenderPassAttachmentBeginInfoKHR::builder()
-                    .attachments(std::slice::from_ref(&self.bvk.swapchain_image_views.as_ref().unwrap()[i]));
+                let mut renderpass_attachment_begin_info =
+                    vk::RenderPassAttachmentBeginInfoKHR::builder().attachments(
+                        std::slice::from_ref(&self.bvk.swapchain_image_views.as_ref().unwrap()[i]),
+                    );
                 let mut clear_values = vk::ClearValue::default();
                 clear_values.color.float32 = [0.0f32, 0.0f32, 0.0f32, 0.0f32];
                 let renderpass_begin_info = vk::RenderPassBeginInfo::builder()
@@ -605,7 +620,10 @@ impl GraphVk {
             );
             // if the swapchain is suboptimal
             if res.is_err() || res.unwrap().1 {
-                self.bvk.device.device_wait_idle();
+                self.bvk
+                    .device
+                    .device_wait_idle()
+                    .expect("Device wait failed");
                 self.bvk.recreate_swapchain(
                     self.bvk.swapchain_create_info.unwrap().present_mode,
                     vk::Extent2D {
@@ -625,14 +643,18 @@ impl GraphVk {
                 return;
             }
             let res = res.unwrap();
-            self.bvk.device.wait_for_fences(
-                std::slice::from_ref(&current_frame_data.after_exec_fence),
-                false,
-                u64::MAX,
-            );
             self.bvk
                 .device
-                .reset_fences(std::slice::from_ref(&current_frame_data.after_exec_fence));
+                .wait_for_fences(
+                    std::slice::from_ref(&current_frame_data.after_exec_fence),
+                    false,
+                    u64::MAX,
+                )
+                .expect("Fence wait failed");
+            self.bvk
+                .device
+                .reset_fences(std::slice::from_ref(&current_frame_data.after_exec_fence))
+                .expect("Fence reset failed");
 
             let wait_semaphore_submit_info = vk::SemaphoreSubmitInfoKHR::builder()
                 .semaphore(self.semaphores[0])
@@ -650,11 +672,13 @@ impl GraphVk {
                 .command_buffer_infos(std::slice::from_ref(&command_submit_info))
                 .signal_semaphore_infos(std::slice::from_ref(&signal_semaphore_submit_info))
                 .build();
-            self.sync2.queue_submit2(
-                self.bvk.queues[0],
-                std::slice::from_ref(&submit_info),
-                current_frame_data.after_exec_fence,
-            ).expect("Error submitting queue");
+            self.sync2
+                .queue_submit2(
+                    self.bvk.queues[0],
+                    std::slice::from_ref(&submit_info),
+                    current_frame_data.after_exec_fence,
+                )
+                .expect("Error submitting queue");
 
             let present_info = vk::PresentInfoKHR::builder()
                 .wait_semaphores(std::slice::from_ref(&self.semaphores[1]))
@@ -664,7 +688,8 @@ impl GraphVk {
                 .swapchain_fn
                 .as_ref()
                 .unwrap()
-                .queue_present(self.bvk.queues[0], &present_info);
+                .queue_present(self.bvk.queues[0], &present_info)
+                .expect("Queue present failed");
 
             self.frames_count += 1;
         }
