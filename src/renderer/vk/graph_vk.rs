@@ -59,7 +59,7 @@ impl GraphVk {
             },
         );
         let sync2 = khr::Synchronization2::new(&base_vk.instance, &base_vk.device);
-        let buffers = Self::create_curve_vertex_buffers(&mut base_vk, window_size.0 as usize);
+        let buffers = Self::create_curve_vertex_buffers(&mut base_vk);
 
         let buffer_create_info = vk::BufferCreateInfo::builder()
             .size(std::mem::size_of::<nalgebra::Matrix4<f32>>() as u64)
@@ -118,10 +118,14 @@ impl GraphVk {
         }
     }
 
-    fn create_curve_vertex_buffers(bvk: &mut BaseVk, points: usize) -> [BufferAllocation; 2] {
+    fn get_required_vertex_buffer_size(bvk: &BaseVk) -> usize {
+        (bvk.swapchain_create_info.as_ref().unwrap().image_extent.width as usize + 4) * (2 * std::mem::size_of::<f32>())
+    }
+
+    fn create_curve_vertex_buffers(bvk: &mut BaseVk) -> [BufferAllocation; 2] {
         // The size required for the buffers is calculated as the size of the points and the axes
         let mut buffer_create_info = vk::BufferCreateInfo::builder()
-            .size(((points + 4) * (2 * std::mem::size_of::<f32>())) as u64)
+            .size(Self::get_required_vertex_buffer_size(&bvk) as u64)
             .usage(vk::BufferUsageFlags::TRANSFER_SRC)
             .sharing_mode(vk::SharingMode::EXCLUSIVE)
             .build();
@@ -135,13 +139,12 @@ impl GraphVk {
         [host_buffer, device_buffer]
     }
 
-    fn recreate_curve_vertex_buffers(&mut self, points: usize) {
-        let size = (points + 4) * (2 * std::mem::size_of::<f32>());
-        if size > self.host_curve_buffer.allocation.size() as usize {
+    fn recreate_curve_vertex_buffers(&mut self) {
+        if Self::get_required_vertex_buffer_size(&self.bvk) > self.host_curve_buffer.allocation.size() as usize {
             self.bvk.destroy_buffer(&self.host_curve_buffer);
             self.bvk.destroy_buffer(&self.device_curve_buffer);
 
-            let v = Self::create_curve_vertex_buffers(&mut self.bvk, points);
+            let v = Self::create_curve_vertex_buffers(&mut self.bvk);
             self.host_curve_buffer = v[0].clone();
             self.device_curve_buffer = v[1].clone();
         }
@@ -481,7 +484,7 @@ impl GraphVk {
                 let region = vk::BufferCopy::builder()
                     .src_offset(0)
                     .dst_offset(0)
-                    .size(self.host_curve_buffer.allocation.size());
+                    .size(Self::get_required_vertex_buffer_size(&self.bvk) as u64);
                 self.bvk.device.cmd_copy_buffer(
                     *cmd_buf,
                     self.host_curve_buffer.buffer,
@@ -617,7 +620,7 @@ impl GraphVk {
                 );
                 self.bvk.device.destroy_framebuffer(self.framebuffer, None);
                 self.framebuffer = Self::create_framebuffer(&self.bvk, self.renderpass);
-                self.recreate_curve_vertex_buffers(window.inner_size().width as usize);
+                self.recreate_curve_vertex_buffers();
                 self.prepare();
                 return;
             }
