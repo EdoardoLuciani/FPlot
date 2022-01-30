@@ -23,20 +23,30 @@ pub unsafe fn clone_vk_physical_device_features2_structure(
         }};
     }
     while !source_ptr.is_null() {
-        let cloned_child_struct_ptr = match (*(source_ptr as *const vk::PhysicalDeviceFeatures2)).s_type {
-            vk::StructureType::PHYSICAL_DEVICE_VULKAN_1_1_FEATURES =>
-                allocate_struct!(vk::StructureType::PHYSICAL_DEVICE_VULKAN_1_1_FEATURES,
-                    vk::PhysicalDeviceVulkan11Features),
-            vk::StructureType::PHYSICAL_DEVICE_DESCRIPTOR_INDEXING_FEATURES_EXT =>
-                allocate_struct!(vk::StructureType::PHYSICAL_DEVICE_DESCRIPTOR_INDEXING_FEATURES_EXT,
-                    vk::PhysicalDeviceDescriptorIndexingFeatures),
-            vk::StructureType::PHYSICAL_DEVICE_SYNCHRONIZATION_2_FEATURES_KHR =>
-                allocate_struct!(vk::StructureType::PHYSICAL_DEVICE_SYNCHRONIZATION_2_FEATURES_KHR,
-                    vk::PhysicalDeviceSynchronization2FeaturesKHR),
-            vk::StructureType::PHYSICAL_DEVICE_IMAGELESS_FRAMEBUFFER_FEATURES =>
-                allocate_struct!(vk::StructureType::PHYSICAL_DEVICE_IMAGELESS_FRAMEBUFFER_FEATURES,
-                    vk::PhysicalDeviceImagelessFramebufferFeatures),
-            _ => {panic!("Found unrecognized struct inside clone_vkPhysicalDeviceFeatures2")},
+        let cloned_child_struct_ptr = match (*(source_ptr as *const vk::PhysicalDeviceFeatures2))
+            .s_type
+        {
+            vk::StructureType::PHYSICAL_DEVICE_VULKAN_1_1_FEATURES => allocate_struct!(
+                vk::StructureType::PHYSICAL_DEVICE_VULKAN_1_1_FEATURES,
+                vk::PhysicalDeviceVulkan11Features
+            ),
+            vk::StructureType::PHYSICAL_DEVICE_DESCRIPTOR_INDEXING_FEATURES_EXT => {
+                allocate_struct!(
+                    vk::StructureType::PHYSICAL_DEVICE_DESCRIPTOR_INDEXING_FEATURES_EXT,
+                    vk::PhysicalDeviceDescriptorIndexingFeatures
+                )
+            }
+            vk::StructureType::PHYSICAL_DEVICE_SYNCHRONIZATION_2_FEATURES_KHR => allocate_struct!(
+                vk::StructureType::PHYSICAL_DEVICE_SYNCHRONIZATION_2_FEATURES_KHR,
+                vk::PhysicalDeviceSynchronization2FeaturesKHR
+            ),
+            vk::StructureType::PHYSICAL_DEVICE_IMAGELESS_FRAMEBUFFER_FEATURES => allocate_struct!(
+                vk::StructureType::PHYSICAL_DEVICE_IMAGELESS_FRAMEBUFFER_FEATURES,
+                vk::PhysicalDeviceImagelessFramebufferFeatures
+            ),
+            _ => {
+                panic!("Found unrecognized struct inside clone_vkPhysicalDeviceFeatures2")
+            }
         };
         (*(cloned_child_struct_ptr as *mut vk::PhysicalDeviceVulkan11Features)).p_next = null_mut();
         *dst_ptr = cloned_child_struct_ptr as *mut c_void;
@@ -171,22 +181,25 @@ mod tests {
 
     #[test]
     fn clone_correctly() {
-        let mut imageless_fb = vk::PhysicalDeviceImagelessFramebufferFeatures::builder()
-            .imageless_framebuffer(true);
+        let mut imageless_fb =
+            vk::PhysicalDeviceImagelessFramebufferFeatures::builder().imageless_framebuffer(true);
         let mut sync2 =
             vk::PhysicalDeviceSynchronization2FeaturesKHR::builder().synchronization2(true);
         let original_struct = vk::PhysicalDeviceFeatures2::builder()
             .push_next(&mut sync2)
             .push_next(&mut imageless_fb);
 
-        let cloned_struct = unsafe { clone_vk_physical_device_features2_structure(&original_struct) };
+        let cloned_struct =
+            unsafe { clone_vk_physical_device_features2_structure(&original_struct) };
 
         let mut original_pnext = original_struct.p_next;
         let mut cloned_pnext = cloned_struct.p_next;
 
         while !original_pnext.is_null() && !cloned_pnext.is_null() {
-            let next_original_struct = unsafe { *(original_pnext as *const vk::PhysicalDeviceFeatures2) };
-            let next_cloned_struct = unsafe { *(cloned_pnext as *const vk::PhysicalDeviceFeatures2) };
+            let next_original_struct =
+                unsafe { *(original_pnext as *const vk::PhysicalDeviceFeatures2) };
+            let next_cloned_struct =
+                unsafe { *(cloned_pnext as *const vk::PhysicalDeviceFeatures2) };
 
             assert_eq!(next_original_struct.s_type, next_cloned_struct.s_type);
 
@@ -201,24 +214,24 @@ mod tests {
     #[should_panic]
     fn clone_with_unknown_struct() {
         // multiview is a struct that has not yet been added
-        let mut multiview = vk::PhysicalDeviceMultiviewFeatures::builder()
-            .multiview(true);
+        let mut multiview = vk::PhysicalDeviceMultiviewFeatures::builder().multiview(true);
         let mut sync2 =
             vk::PhysicalDeviceSynchronization2FeaturesKHR::builder().synchronization2(true);
         let original_struct = vk::PhysicalDeviceFeatures2::builder()
             .push_next(&mut sync2)
             .push_next(&mut multiview);
-        let cloned_struct = unsafe { clone_vk_physical_device_features2_structure(&original_struct) };
+        let cloned_struct =
+            unsafe { clone_vk_physical_device_features2_structure(&original_struct) };
     }
 
     #[test]
     fn destroy_correctly() {
         let mut sync2 =
             vk::PhysicalDeviceSynchronization2FeaturesKHR::builder().synchronization2(true);
-        let original_struct = vk::PhysicalDeviceFeatures2::builder()
-            .push_next(&mut sync2);
+        let original_struct = vk::PhysicalDeviceFeatures2::builder().push_next(&mut sync2);
 
-        let mut cloned_struct = unsafe { clone_vk_physical_device_features2_structure(&original_struct) };
+        let mut cloned_struct =
+            unsafe { clone_vk_physical_device_features2_structure(&original_struct) };
         unsafe { destroy_vk_physical_device_features2(&mut cloned_struct) }
         assert_eq!(cloned_struct.p_next, null_mut());
     }
@@ -234,13 +247,18 @@ mod tests {
         let requested_ptr = &requested as *const vk::PhysicalDeviceFeatures as *const c_void;
         let baseline_ptr = &baseline as *const vk::PhysicalDeviceFeatures as *const c_void;
 
-        assert!(unsafe{compare_device_features_structs(baseline_ptr, requested_ptr, size_of::<vk::PhysicalDeviceFeatures>())});
+        assert!(unsafe {
+            compare_device_features_structs(
+                baseline_ptr,
+                requested_ptr,
+                size_of::<vk::PhysicalDeviceFeatures>(),
+            )
+        });
     }
 
     #[test]
     fn compare_device_features_struct_compatible_but_pointing_to_others() {
-        let mut requested = vk::PhysicalDeviceFeatures2::builder()
-            .build();
+        let mut requested = vk::PhysicalDeviceFeatures2::builder().build();
         requested.features.robust_buffer_access = vk::TRUE;
 
         let mut sync2 =
@@ -253,7 +271,13 @@ mod tests {
         let requested_ptr = &requested as *const vk::PhysicalDeviceFeatures2 as *const c_void;
         let baseline_ptr = &baseline as *const vk::PhysicalDeviceFeatures2 as *const c_void;
 
-        assert!(unsafe{compare_device_features_structs(baseline_ptr, requested_ptr, size_of::<vk::PhysicalDeviceFeatures2>())});
+        assert!(unsafe {
+            compare_device_features_structs(
+                baseline_ptr,
+                requested_ptr,
+                size_of::<vk::PhysicalDeviceFeatures2>(),
+            )
+        });
     }
 
     #[test]
@@ -267,7 +291,13 @@ mod tests {
         let requested_ptr = &requested as *const vk::PhysicalDeviceFeatures as *const c_void;
         let baseline_ptr = &baseline as *const vk::PhysicalDeviceFeatures as *const c_void;
 
-        assert!(!unsafe{compare_device_features_structs(baseline_ptr, requested_ptr, size_of::<vk::PhysicalDeviceFeatures>())});
+        assert!(!unsafe {
+            compare_device_features_structs(
+                baseline_ptr,
+                requested_ptr,
+                size_of::<vk::PhysicalDeviceFeatures>(),
+            )
+        });
     }
 
     #[test]
@@ -277,7 +307,7 @@ mod tests {
         let mut baseline = vk::PhysicalDeviceFeatures2::default();
         baseline.features.robust_buffer_access = vk::TRUE;
 
-        assert!(unsafe{compare_vk_physical_device_features2(&baseline, &requested)});
+        assert!(unsafe { compare_vk_physical_device_features2(&baseline, &requested) });
     }
 
     #[test]
@@ -287,54 +317,49 @@ mod tests {
         let mut baseline = vk::PhysicalDeviceFeatures2::default();
         baseline.features.robust_buffer_access = vk::FALSE;
 
-        assert!(!unsafe{compare_vk_physical_device_features2(&baseline, &requested)});
+        assert!(!unsafe { compare_vk_physical_device_features2(&baseline, &requested) });
     }
 
     #[test]
     fn compare_vk_physical_device_features2_struct_chained_compatible() {
-        let mut requested_sync2 = vk::PhysicalDeviceSynchronization2FeaturesKHR::builder()
-            .synchronization2(true);
-        let mut requested = vk::PhysicalDeviceFeatures2::builder()
-            .push_next(&mut requested_sync2);
+        let mut requested_sync2 =
+            vk::PhysicalDeviceSynchronization2FeaturesKHR::builder().synchronization2(true);
+        let mut requested = vk::PhysicalDeviceFeatures2::builder().push_next(&mut requested_sync2);
         requested.features.robust_buffer_access = vk::FALSE;
 
-        let mut baseline_sync2 = vk::PhysicalDeviceSynchronization2FeaturesKHR::builder()
-            .synchronization2(true);
-        let mut baseline = vk::PhysicalDeviceFeatures2::builder()
-            .push_next(&mut baseline_sync2);
+        let mut baseline_sync2 =
+            vk::PhysicalDeviceSynchronization2FeaturesKHR::builder().synchronization2(true);
+        let mut baseline = vk::PhysicalDeviceFeatures2::builder().push_next(&mut baseline_sync2);
         baseline.features.robust_buffer_access = vk::TRUE;
 
-        assert!(unsafe{compare_vk_physical_device_features2(&baseline, &requested)});
+        assert!(unsafe { compare_vk_physical_device_features2(&baseline, &requested) });
     }
 
     #[test]
     fn compare_vk_physical_device_features2_struct_chained_incompatible() {
-        let mut requested_sync2 = vk::PhysicalDeviceSynchronization2FeaturesKHR::builder()
-            .synchronization2(true);
-        let mut requested = vk::PhysicalDeviceFeatures2::builder()
-            .push_next(&mut requested_sync2);
+        let mut requested_sync2 =
+            vk::PhysicalDeviceSynchronization2FeaturesKHR::builder().synchronization2(true);
+        let mut requested = vk::PhysicalDeviceFeatures2::builder().push_next(&mut requested_sync2);
         requested.features.robust_buffer_access = vk::FALSE;
 
-        let mut baseline_sync2 = vk::PhysicalDeviceSynchronization2FeaturesKHR::builder()
-            .synchronization2(false);
-        let mut baseline = vk::PhysicalDeviceFeatures2::builder()
-            .push_next(&mut baseline_sync2);
+        let mut baseline_sync2 =
+            vk::PhysicalDeviceSynchronization2FeaturesKHR::builder().synchronization2(false);
+        let mut baseline = vk::PhysicalDeviceFeatures2::builder().push_next(&mut baseline_sync2);
         baseline.features.robust_buffer_access = vk::TRUE;
 
-        assert!(!unsafe{compare_vk_physical_device_features2(&baseline, &requested)});
+        assert!(!unsafe { compare_vk_physical_device_features2(&baseline, &requested) });
     }
 
     #[test]
     fn compare_vk_physical_device_features2_struct_chained_different_incompatible() {
-        let mut requested_sync2 = vk::PhysicalDeviceSynchronization2FeaturesKHR::builder()
-            .synchronization2(true);
-        let mut requested = vk::PhysicalDeviceFeatures2::builder()
-            .push_next(&mut requested_sync2);
+        let mut requested_sync2 =
+            vk::PhysicalDeviceSynchronization2FeaturesKHR::builder().synchronization2(true);
+        let mut requested = vk::PhysicalDeviceFeatures2::builder().push_next(&mut requested_sync2);
         requested.features.robust_buffer_access = vk::FALSE;
 
         let mut baseline = vk::PhysicalDeviceFeatures2::default();
         baseline.features.robust_buffer_access = vk::TRUE;
 
-        assert!(!unsafe{compare_vk_physical_device_features2(&baseline, &requested)});
+        assert!(!unsafe { compare_vk_physical_device_features2(&baseline, &requested) });
     }
 }

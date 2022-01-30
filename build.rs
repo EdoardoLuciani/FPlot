@@ -1,5 +1,5 @@
 use shaderc;
-use std::ffi::{OsString};
+use std::ffi::OsString;
 use std::fs::File;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -22,7 +22,8 @@ fn main() {
     );
     out_dir.push("assets");
     out_dir.push("shaders-spirv");
-    std::fs::create_dir_all(out_dir.as_path()).expect("Could not create assets//shaders-spirv directory in CARGO_MANIFEST_DIR");
+    std::fs::create_dir_all(out_dir.as_path())
+        .expect("Could not create assets//shaders-spirv directory in CARGO_MANIFEST_DIR");
 
     // Create the compiler
     let mut compiler = shaderc::Compiler::new().unwrap();
@@ -52,7 +53,9 @@ fn compile_recursively<T: AsRef<Path>>(
             };
             let mut shader_file = File::open(&path).unwrap();
             let mut shader_contents = String::new();
-            shader_file.read_to_string(&mut shader_contents).expect("Could not read {path} contents");
+            shader_file
+                .read_to_string(&mut shader_contents)
+                .expect("Could not read {path} contents");
             let compilation_result = compiler.compile_into_spirv(
                 &shader_contents,
                 shader_kind,
