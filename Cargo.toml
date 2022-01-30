@@ -12,6 +12,7 @@ winit = "0.26.0"
 raw-window-handle = "0.4.2"
 gpu-allocator = "0.14.0"
 nalgebra = "0.30.0"
+cfg-if = "1.0.0"
 
 [build-dependencies]
 shaderc = "0.7.3"
