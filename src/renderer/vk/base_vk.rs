@@ -12,8 +12,6 @@ use raw_window_handle::RawWindowHandle;
 pub struct BaseVk {
     entry_fn: ash::Entry,
     pub instance: ash::Instance,
-    debug_utils_fn: Option<ext::DebugUtils>,
-    debug_utils_messenger: vk::DebugUtilsMessengerEXT,
     surface: vk::SurfaceKHR,
     surface_fn: Option<khr::Surface>,
     physical_device: vk::PhysicalDevice,
@@ -25,6 +23,10 @@ pub struct BaseVk {
     pub swapchain: vk::SwapchainKHR,
     pub swapchain_image_views: Option<Vec<vk::ImageView>>,
     pub allocator: ManuallyDrop<gpu_allocator::vulkan::Allocator>,
+    #[cfg(debug_assertions)]
+    debug_utils_fn: ext::DebugUtils,
+    #[cfg(debug_assertions)]
+    debug_utils_messenger: vk::DebugUtilsMessengerEXT,
 }
 
 #[derive(Clone)]
@@ -78,16 +80,17 @@ impl BaseVk {
             .iter()
             .map(|s| CString::new(*s).unwrap())
             .collect();
-        // layer_names is a vec even if the size is known at compile time given
-        // a debug or release config, but I did not find a way to make the compiler understand it
-        let mut layer_names = Vec::new();
-        if cfg!(debug_assertions) {
-            layer_names.push(
-                CStr::from_bytes_with_nul(b"VK_LAYER_KHRONOS_validation\0")
+
+        cfg_if::cfg_if! {
+            if #[cfg(debug_assertions)] {
+                instance_extensions.push(CString::new("VK_EXT_debug_utils").unwrap());
+                let validation_layer_name = CStr::from_bytes_with_nul(b"VK_LAYER_KHRONOS_validation\0")
                     .unwrap()
-                    .as_ptr(),
-            );
-            instance_extensions.push(CString::new("VK_EXT_debug_utils").unwrap());
+                    .as_ptr();
+                let layer_names = [validation_layer_name];
+            } else {
+                let layer_names = [];
+            }
         }
 
         // adding the required extensions needed for creating a surface based on the os
@@ -126,28 +129,26 @@ impl BaseVk {
         };
 
         // Creation of an optional debug reporter
-        let mut debug_utils_fn = None;
-        let mut debug_utils_messenger = vk::DebugUtilsMessengerEXT::null();
-        if cfg!(debug_assertions) {
-            let debug_utils_messenger_create_info = vk::DebugUtilsMessengerCreateInfoEXT::builder()
-                .message_severity(
-                    vk::DebugUtilsMessageSeverityFlagsEXT::INFO
-                        | vk::DebugUtilsMessageSeverityFlagsEXT::WARNING
-                        | vk::DebugUtilsMessageSeverityFlagsEXT::ERROR
-                        | vk::DebugUtilsMessageSeverityFlagsEXT::VERBOSE,
-                )
-                .message_type(
-                    vk::DebugUtilsMessageTypeFlagsEXT::VALIDATION
-                        | vk::DebugUtilsMessageTypeFlagsEXT::PERFORMANCE,
-                )
-                .pfn_user_callback(Some(vk_debug_callback));
-            debug_utils_fn = Some(ext::DebugUtils::new(&entry_fn, &instance));
-            unsafe {
-                debug_utils_messenger = debug_utils_fn
-                    .as_ref()
-                    .unwrap()
-                    .create_debug_utils_messenger(&debug_utils_messenger_create_info, None)
-                    .unwrap()
+        cfg_if::cfg_if! {
+            if #[cfg(debug_assertions)] {
+                let debug_utils_messenger_create_info = vk::DebugUtilsMessengerCreateInfoEXT::builder()
+                    .message_severity(
+                        vk::DebugUtilsMessageSeverityFlagsEXT::INFO
+                            | vk::DebugUtilsMessageSeverityFlagsEXT::WARNING
+                            | vk::DebugUtilsMessageSeverityFlagsEXT::ERROR
+                            | vk::DebugUtilsMessageSeverityFlagsEXT::VERBOSE,
+                    )
+                    .message_type(
+                        vk::DebugUtilsMessageTypeFlagsEXT::VALIDATION
+                            | vk::DebugUtilsMessageTypeFlagsEXT::PERFORMANCE,
+                    )
+                    .pfn_user_callback(Some(vk_debug_callback));
+                let debug_utils_fn = ext::DebugUtils::new(&entry_fn, &instance);
+                let debug_utils_messenger = unsafe {
+                    debug_utils_fn
+                        .create_debug_utils_messenger(&debug_utils_messenger_create_info, None)
+                        .unwrap()
+                };
             }
         }
 
@@ -339,8 +340,6 @@ impl BaseVk {
         BaseVk {
             entry_fn,
             instance,
-            debug_utils_fn,
-            debug_utils_messenger,
             surface,
             surface_fn,
             physical_device: selected_device.0,
@@ -352,6 +351,10 @@ impl BaseVk {
             swapchain: vk::SwapchainKHR::null(),
             swapchain_image_views: None,
             allocator: ManuallyDrop::new(allocator),
+            #[cfg(debug_assertions)]
+            debug_utils_fn,
+            #[cfg(debug_assertions)]
+            debug_utils_messenger,
         }
     }
 
@@ -628,12 +631,9 @@ impl Drop for BaseVk {
             if let Some(fp) = self.surface_fn.as_ref() {
                 fp.destroy_surface(self.surface, None);
             }
-            if cfg!(debug_assertions) {
-                self.debug_utils_fn
-                    .as_ref()
-                    .unwrap()
-                    .destroy_debug_utils_messenger(self.debug_utils_messenger, None);
-            }
+            #[cfg(debug_assertions)]
+            self.debug_utils_fn
+                .destroy_debug_utils_messenger(self.debug_utils_messenger, None);
             self.instance.destroy_instance(None);
         }
     }
