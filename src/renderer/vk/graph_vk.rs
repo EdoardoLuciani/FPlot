@@ -418,7 +418,7 @@ impl GraphVk {
         let framebuffer_attachments_image_info = vk::FramebufferAttachmentImageInfo::builder()
             .usage(bvk.swapchain_create_info.unwrap().image_usage)
             .width(bvk.swapchain_create_info.unwrap().image_extent.width)
-            .height(bvk.swapchain_create_info.unwrap().image_extent.width)
+            .height(bvk.swapchain_create_info.unwrap().image_extent.height)
             .layer_count(1)
             .view_formats(std::slice::from_ref(&bvk.swapchain_create_info.as_ref().unwrap().image_format));
         let mut framebuffer_attachments_create_info = vk::FramebufferAttachmentsCreateInfoKHR::builder()
@@ -430,6 +430,7 @@ impl GraphVk {
             .width(bvk.swapchain_create_info.unwrap().image_extent.width)
             .height(bvk.swapchain_create_info.unwrap().image_extent.height)
             .layers(1);
+        // todo: maybe remove width and height field from framebuffer_create_info, as the imageless framebuffer is used
         framebuffer_create_info.attachment_count = 1;
         unsafe {
             bvk.device
