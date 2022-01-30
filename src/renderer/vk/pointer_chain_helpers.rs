@@ -1,3 +1,6 @@
+#![allow(non_snake_case)]
+#![allow(unused_variables)]
+
 use ash::vk;
 use std::alloc::Layout;
 use std::ffi::c_void;

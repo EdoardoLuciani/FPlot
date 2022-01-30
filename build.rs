@@ -1,6 +1,5 @@
 use shaderc;
-use std::env;
-use std::ffi::{OsStr, OsString};
+use std::ffi::{OsString};
 use std::fs::File;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -23,14 +22,14 @@ fn main() {
     );
     out_dir.push("assets");
     out_dir.push("shaders-spirv");
-    std::fs::create_dir_all(out_dir.as_path());
+    std::fs::create_dir_all(out_dir.as_path()).expect("Could not create assets//shaders-spirv directory in CARGO_MANIFEST_DIR");
 
     // Create the compiler
     let mut compiler = shaderc::Compiler::new().unwrap();
 
     let err = compile_recursively(shaders_source_dir, out_dir.as_path(), &mut compiler);
     if err {
-        panic!("Some shaders did not compile")
+        panic!("Some shaders did not compile!")
     }
 }
 
@@ -46,13 +45,14 @@ fn compile_recursively<T: AsRef<Path>>(
             let shader_kind = match path.extension().unwrap().to_str() {
                 Some("vert") => shaderc::ShaderKind::Vertex,
                 Some("frag") => shaderc::ShaderKind::Fragment,
+                Some("comp") => shaderc::ShaderKind::Compute,
                 _ => {
                     continue;
                 }
             };
             let mut shader_file = File::open(&path).unwrap();
             let mut shader_contents = String::new();
-            shader_file.read_to_string(&mut shader_contents);
+            shader_file.read_to_string(&mut shader_contents).expect("Could not read {path} contents");
             let compilation_result = compiler.compile_into_spirv(
                 &shader_contents,
                 shader_kind,
@@ -66,10 +66,10 @@ fn compile_recursively<T: AsRef<Path>>(
                     let mut new_shader_name = OsString::from(path.file_name().unwrap());
                     new_shader_name.push(".spirv");
                     let new_shader_path = PathBuf::from(out_dir.as_ref()).join(new_shader_name);
-                    let mut shader_binary_file = File::create(new_shader_path);
-                    shader_binary_file
+                    File::create(new_shader_path)
                         .expect("Cannot create shader file")
-                        .write_all(v.as_binary_u8());
+                        .write_all(v.as_binary_u8())
+                        .expect("Cannot write binary contents to {new_shader_path}");
                 }
                 Err(v) => {
                     eprintln!("Shader {}", v);
