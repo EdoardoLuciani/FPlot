@@ -164,3 +164,177 @@ pub unsafe fn compare_vk_physical_device_features2(
     }
     baseline_ptr.is_null() && desired_ptr.is_null()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn clone_correctly() {
+        let mut imageless_fb = vk::PhysicalDeviceImagelessFramebufferFeatures::builder()
+            .imageless_framebuffer(true);
+        let mut sync2 =
+            vk::PhysicalDeviceSynchronization2FeaturesKHR::builder().synchronization2(true);
+        let original_struct = vk::PhysicalDeviceFeatures2::builder()
+            .push_next(&mut sync2)
+            .push_next(&mut imageless_fb);
+
+        let cloned_struct = unsafe { clone_vk_physical_device_features2_structure(&original_struct) };
+
+        let mut original_pnext = original_struct.p_next;
+        let mut cloned_pnext = cloned_struct.p_next;
+
+        while !original_pnext.is_null() && !cloned_pnext.is_null() {
+            let next_original_struct = unsafe { *(original_pnext as *const vk::PhysicalDeviceFeatures2) };
+            let next_cloned_struct = unsafe { *(cloned_pnext as *const vk::PhysicalDeviceFeatures2) };
+
+            assert_eq!(next_original_struct.s_type, next_cloned_struct.s_type);
+
+            original_pnext = next_original_struct.p_next;
+            cloned_pnext = next_cloned_struct.p_next;
+        }
+        assert_eq!(original_pnext, null_mut());
+        assert_eq!(cloned_pnext, null_mut());
+    }
+
+    #[test]
+    #[should_panic]
+    fn clone_with_unknown_struct() {
+        // multiview is a struct that has not yet been added
+        let mut multiview = vk::PhysicalDeviceMultiviewFeatures::builder()
+            .multiview(true);
+        let mut sync2 =
+            vk::PhysicalDeviceSynchronization2FeaturesKHR::builder().synchronization2(true);
+        let original_struct = vk::PhysicalDeviceFeatures2::builder()
+            .push_next(&mut sync2)
+            .push_next(&mut multiview);
+        let cloned_struct = unsafe { clone_vk_physical_device_features2_structure(&original_struct) };
+    }
+
+    #[test]
+    fn destroy_correctly() {
+        let mut sync2 =
+            vk::PhysicalDeviceSynchronization2FeaturesKHR::builder().synchronization2(true);
+        let original_struct = vk::PhysicalDeviceFeatures2::builder()
+            .push_next(&mut sync2);
+
+        let mut cloned_struct = unsafe { clone_vk_physical_device_features2_structure(&original_struct) };
+        unsafe { destroy_vk_physical_device_features2(&mut cloned_struct) }
+        assert_eq!(cloned_struct.p_next, null_mut());
+    }
+
+    #[test]
+    fn compare_device_features_struct_compatible() {
+        let requested = vk::PhysicalDeviceFeatures::builder()
+            .robust_buffer_access(true)
+            .build();
+        let baseline = vk::PhysicalDeviceFeatures::builder()
+            .robust_buffer_access(true)
+            .build();
+        let requested_ptr = &requested as *const vk::PhysicalDeviceFeatures as *const c_void;
+        let baseline_ptr = &baseline as *const vk::PhysicalDeviceFeatures as *const c_void;
+
+        assert!(unsafe{compare_device_features_structs(baseline_ptr, requested_ptr, size_of::<vk::PhysicalDeviceFeatures>())});
+    }
+
+    #[test]
+    fn compare_device_features_struct_compatible_but_pointing_to_others() {
+        let mut requested = vk::PhysicalDeviceFeatures2::builder()
+            .build();
+        requested.features.robust_buffer_access = vk::TRUE;
+
+        let mut sync2 =
+            vk::PhysicalDeviceSynchronization2FeaturesKHR::builder().synchronization2(true);
+        let mut baseline = vk::PhysicalDeviceFeatures2::builder()
+            .push_next(&mut sync2)
+            .build();
+        baseline.features.robust_buffer_access = vk::TRUE;
+
+        let requested_ptr = &requested as *const vk::PhysicalDeviceFeatures2 as *const c_void;
+        let baseline_ptr = &baseline as *const vk::PhysicalDeviceFeatures2 as *const c_void;
+
+        assert!(unsafe{compare_device_features_structs(baseline_ptr, requested_ptr, size_of::<vk::PhysicalDeviceFeatures2>())});
+    }
+
+    #[test]
+    fn compare_device_features_struct_incompatible() {
+        let requested = vk::PhysicalDeviceFeatures::builder()
+            .robust_buffer_access(true)
+            .build();
+        let baseline = vk::PhysicalDeviceFeatures::builder()
+            .robust_buffer_access(false)
+            .build();
+        let requested_ptr = &requested as *const vk::PhysicalDeviceFeatures as *const c_void;
+        let baseline_ptr = &baseline as *const vk::PhysicalDeviceFeatures as *const c_void;
+
+        assert!(!unsafe{compare_device_features_structs(baseline_ptr, requested_ptr, size_of::<vk::PhysicalDeviceFeatures>())});
+    }
+
+    #[test]
+    fn compare_vk_physical_device_features2_struct_compatible() {
+        let mut requested = vk::PhysicalDeviceFeatures2::default();
+        requested.features.robust_buffer_access = vk::FALSE;
+        let mut baseline = vk::PhysicalDeviceFeatures2::default();
+        baseline.features.robust_buffer_access = vk::TRUE;
+
+        assert!(unsafe{compare_vk_physical_device_features2(&baseline, &requested)});
+    }
+
+    #[test]
+    fn compare_vk_physical_device_features2_struct_incompatible() {
+        let mut requested = vk::PhysicalDeviceFeatures2::default();
+        requested.features.robust_buffer_access = vk::TRUE;
+        let mut baseline = vk::PhysicalDeviceFeatures2::default();
+        baseline.features.robust_buffer_access = vk::FALSE;
+
+        assert!(!unsafe{compare_vk_physical_device_features2(&baseline, &requested)});
+    }
+
+    #[test]
+    fn compare_vk_physical_device_features2_struct_chained_compatible() {
+        let mut requested_sync2 = vk::PhysicalDeviceSynchronization2FeaturesKHR::builder()
+            .synchronization2(true);
+        let mut requested = vk::PhysicalDeviceFeatures2::builder()
+            .push_next(&mut requested_sync2);
+        requested.features.robust_buffer_access = vk::FALSE;
+
+        let mut baseline_sync2 = vk::PhysicalDeviceSynchronization2FeaturesKHR::builder()
+            .synchronization2(true);
+        let mut baseline = vk::PhysicalDeviceFeatures2::builder()
+            .push_next(&mut baseline_sync2);
+        baseline.features.robust_buffer_access = vk::TRUE;
+
+        assert!(unsafe{compare_vk_physical_device_features2(&baseline, &requested)});
+    }
+
+    #[test]
+    fn compare_vk_physical_device_features2_struct_chained_incompatible() {
+        let mut requested_sync2 = vk::PhysicalDeviceSynchronization2FeaturesKHR::builder()
+            .synchronization2(true);
+        let mut requested = vk::PhysicalDeviceFeatures2::builder()
+            .push_next(&mut requested_sync2);
+        requested.features.robust_buffer_access = vk::FALSE;
+
+        let mut baseline_sync2 = vk::PhysicalDeviceSynchronization2FeaturesKHR::builder()
+            .synchronization2(false);
+        let mut baseline = vk::PhysicalDeviceFeatures2::builder()
+            .push_next(&mut baseline_sync2);
+        baseline.features.robust_buffer_access = vk::TRUE;
+
+        assert!(!unsafe{compare_vk_physical_device_features2(&baseline, &requested)});
+    }
+
+    #[test]
+    fn compare_vk_physical_device_features2_struct_chained_different_incompatible() {
+        let mut requested_sync2 = vk::PhysicalDeviceSynchronization2FeaturesKHR::builder()
+            .synchronization2(true);
+        let mut requested = vk::PhysicalDeviceFeatures2::builder()
+            .push_next(&mut requested_sync2);
+        requested.features.robust_buffer_access = vk::FALSE;
+
+        let mut baseline = vk::PhysicalDeviceFeatures2::default();
+        baseline.features.robust_buffer_access = vk::TRUE;
+
+        assert!(!unsafe{compare_vk_physical_device_features2(&baseline, &requested)});
+    }
+}
