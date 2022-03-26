@@ -217,7 +217,7 @@ impl GraphVk {
                 .mapped_ptr()
                 .unwrap()
                 .as_ptr() as *mut f32,
-            self.transform_uniform_buffer.allocation.size() as usize / std::mem::size_of::<f32>(),
+                transform.len(),
         );
         unsafe {
             (*dst_ptr).copy_from_slice(transform.data.as_slice());
