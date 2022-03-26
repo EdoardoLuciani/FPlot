@@ -49,6 +49,12 @@ fn get_binary_shader_data<T: AsRef<Path>>(
         "vert" => vk::ShaderStageFlags::VERTEX,
         "frag" => vk::ShaderStageFlags::FRAGMENT,
         "comp" => vk::ShaderStageFlags::COMPUTE,
+        "rgen" => vk::ShaderStageFlags::RAYGEN_KHR,
+        "rint" => vk::ShaderStageFlags::INTERSECTION_KHR,
+        "rahit" => vk::ShaderStageFlags::ANY_HIT_KHR,
+        "rchit" => vk::ShaderStageFlags::CLOSEST_HIT_KHR,
+        "rmiss" => vk::ShaderStageFlags::MISS_KHR,
+        "rcall" => vk::ShaderStageFlags::CALLABLE_KHR,
         _ => panic!("Shader type could not be deducted"),
     };
     let mut file = File::open(path).expect("Could not open shader");
