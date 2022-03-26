@@ -19,11 +19,11 @@ pub struct BaseVk {
     queue_family_index: u32,
     pub device: ash::Device,
     pub queues: Vec<vk::Queue>,
+    pub allocator: ManuallyDrop<gpu_allocator::vulkan::Allocator>,
     pub swapchain_fn: Option<khr::Swapchain>,
     pub swapchain_create_info: Option<vk::SwapchainCreateInfoKHR>,
     pub swapchain: vk::SwapchainKHR,
     pub swapchain_image_views: Option<Vec<vk::ImageView>>,
-    pub allocator: ManuallyDrop<gpu_allocator::vulkan::Allocator>,
     #[cfg(debug_assertions)]
     debug_utils_fn: ext::DebugUtils,
     #[cfg(debug_assertions)]
@@ -66,7 +66,7 @@ impl BaseVk {
         instance_extensions: &[&str],
         device_extensions: &[&str],
         desired_physical_device_features2: &vk::PhysicalDeviceFeatures2,
-        desired_queues: &[(vk::QueueFlags, f32)],
+        desired_queues_with_priorities: &[(vk::QueueFlags, f32)],
         window_handle: Option<RawWindowHandle>,
     ) -> Self {
         let mut instance_extensions = Vec::from(instance_extensions);
@@ -176,11 +176,15 @@ impl BaseVk {
 
         let desired_device_extensions_cptr = Self::get_cptr_vec_from_str_slice(&device_extensions);
 
+        let queues_types = &desired_queues_with_priorities
+            .iter()
+            .map(|q| q.0)
+            .collect::<Vec<_>>();
         let good_devices = Self::filter_good_physical_devices(
             &instance,
             desired_physical_device_features2,
             &desired_device_extensions_cptr.1,
-            desired_queues,
+            &queues_types,
             surface_fn.as_ref(),
             surface,
         );
@@ -188,12 +192,15 @@ impl BaseVk {
             println!("More than one device available selecting the first");
         }
         // Always selecting the first available device might not be the best strategy
-        let selected_device = good_devices.first().expect("No available device found");
+        let selected_device = good_devices.first().expect("No suitable device found");
 
         // Device creation
         let device;
         unsafe {
-            let queue_priorities = desired_queues.iter().map(|q| q.1).collect::<Vec<f32>>();
+            let queue_priorities = desired_queues_with_priorities
+                .iter()
+                .map(|q| q.1)
+                .collect::<Vec<_>>();
             let queues_create_info = vk::DeviceQueueCreateInfo::builder()
                 .queue_family_index(selected_device.1)
                 .queue_priorities(&queue_priorities)
@@ -214,7 +221,7 @@ impl BaseVk {
             false => None,
         };
 
-        let queues = (0..desired_queues.len() as u32)
+        let queues = (0..desired_queues_with_priorities.len() as u32)
             .map(|i| unsafe { device.get_device_queue(selected_device.1, i) })
             .collect::<Vec<_>>();
 
@@ -237,11 +244,11 @@ impl BaseVk {
             queue_family_index: selected_device.1,
             device,
             queues,
+            allocator: ManuallyDrop::new(allocator),
             swapchain_fn,
             swapchain_create_info: None,
             swapchain: vk::SwapchainKHR::null(),
             swapchain_image_views: None,
-            allocator: ManuallyDrop::new(allocator),
             #[cfg(debug_assertions)]
             debug_utils_fn,
             #[cfg(debug_assertions)]
@@ -536,7 +543,7 @@ impl BaseVk {
         instance: &ash::Instance,
         desired_physical_device_features2: &vk::PhysicalDeviceFeatures2,
         desired_device_extensions: &[CString],
-        desired_queues: &[(vk::QueueFlags, f32)],
+        desired_queues: &[vk::QueueFlags],
         surface_fn: Option<&khr::Surface>,
         surface: vk::SurfaceKHR,
     ) -> Vec<(vk::PhysicalDevice, u32)> {
@@ -597,7 +604,7 @@ impl BaseVk {
                                     queue_family
                                         .queue_family_properties
                                         .queue_flags
-                                        .contains(q.0)
+                                        .contains(*q)
                                 });
                                 is_family_queue_good &= desired_queues.len()
                                     <= queue_family.queue_family_properties.queue_count as usize;
