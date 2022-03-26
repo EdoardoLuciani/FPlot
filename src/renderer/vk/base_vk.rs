@@ -6,6 +6,7 @@ use std::borrow::Borrow;
 use std::collections::HashSet;
 use std::ffi::{CStr, CString};
 use std::mem::ManuallyDrop;
+use std::os::raw::c_char;
 
 use raw_window_handle::RawWindowHandle;
 
@@ -68,26 +69,11 @@ impl BaseVk {
         desired_queues: &[(vk::QueueFlags, f32)],
         window_handle: Option<RawWindowHandle>,
     ) -> Self {
-        let application_name = CString::new(application_name).unwrap();
-        let application_info = vk::ApplicationInfo::builder()
-            .application_name(application_name.as_c_str())
-            .application_version(vk::make_api_version(0, 0, 1, 0))
-            .engine_name(CStr::from_bytes_with_nul(b"TheVulkanTemple\0").unwrap())
-            .engine_version(vk::make_api_version(0, 0, 1, 0))
-            .api_version(vk::API_VERSION_1_1);
-
-        let mut instance_extensions: Vec<CString> = instance_extensions
-            .iter()
-            .map(|s| CString::new(*s).unwrap())
-            .collect();
-
+        let mut instance_extensions = Vec::from(instance_extensions);
         cfg_if::cfg_if! {
             if #[cfg(debug_assertions)] {
-                instance_extensions.push(CString::new("VK_EXT_debug_utils").unwrap());
-                let validation_layer_name = CStr::from_bytes_with_nul(b"VK_LAYER_KHRONOS_validation\0")
-                    .unwrap()
-                    .as_ptr();
-                let layer_names = [validation_layer_name];
+                instance_extensions.push("VK_EXT_debug_utils");
+                let layer_names = std::slice::from_ref(&"VK_LAYER_KHRONOS_validation");
             } else {
                 let layer_names = [];
             }
@@ -95,38 +81,30 @@ impl BaseVk {
 
         // adding the required extensions needed for creating a surface based on the os
         if let Some(handle) = window_handle {
-            instance_extensions.push(CString::new("VK_KHR_surface").unwrap());
+            instance_extensions.push("VK_KHR_surface");
             match handle {
                 RawWindowHandle::Win32(_) => {
-                    instance_extensions.push(CString::new("VK_KHR_win32_surface").unwrap());
+                    instance_extensions.push("VK_KHR_win32_surface");
                 }
                 RawWindowHandle::Xlib(_) => {
-                    instance_extensions.push(CString::new("VK_KHR_xlib_surface").unwrap());
+                    instance_extensions.push("VK_KHR_xlib_surface");
                 }
                 RawWindowHandle::Wayland(_) => {
-                    instance_extensions.push(CString::new("VK_KHR_wayland_surface").unwrap());
+                    instance_extensions.push("VK_KHR_wayland_surface");
                 }
                 _ => {
                     panic!("Unrecognized window handle")
                 }
             };
         }
-        let instance_extensions_ptrs = instance_extensions
-            .iter()
-            .map(|s| s.as_ptr())
-            .collect::<Vec<_>>();
-
-        let instance_create_info = vk::InstanceCreateInfo::builder()
-            .application_info(&application_info)
-            .enabled_layer_names(&layer_names)
-            .enabled_extension_names(&instance_extensions_ptrs);
 
         let entry_fn = unsafe { ash::Entry::load().unwrap() };
-        let instance = unsafe {
-            entry_fn
-                .create_instance(&instance_create_info, None)
-                .expect("Could not create VkInstance")
-        };
+        let instance = Self::create_instance(
+            &entry_fn,
+            application_name,
+            &instance_extensions,
+            &layer_names,
+        );
 
         // Creation of an optional debug reporter
         cfg_if::cfg_if! {
@@ -187,107 +165,25 @@ impl BaseVk {
             }
         };
 
-        let mut desired_device_extensions: Vec<CString> = device_extensions
-            .iter()
-            .map(|s| CString::new(*s).unwrap())
-            .collect();
-        let mut surface_fn = None;
-        if surface != vk::SurfaceKHR::null() {
-            surface_fn = Some(khr::Surface::new(&entry_fn, &instance));
-            desired_device_extensions.push(CString::new("VK_KHR_swapchain").unwrap());
-        }
-
-        // Creating a new struct pointer chain to accommodate the features of the physical devices
-        let mut available_device_features = unsafe {
-            clone_vk_physical_device_features2_structure(desired_physical_device_features2)
+        let mut device_extensions = Vec::from(device_extensions);
+        let surface_fn = match surface != vk::SurfaceKHR::null() {
+            true => {
+                device_extensions.push("VK_KHR_swapchain");
+                Some(khr::Surface::new(&entry_fn, &instance))
+            }
+            false => None,
         };
 
-        // Iterate for all physical devices and keep only those that respect our requirements
-        let good_devices;
-        unsafe {
-            good_devices = instance
-                .enumerate_physical_devices()
-                .unwrap()
-                .iter()
-                .filter_map(|physical_device| {
-                    // Check if the physical device supports the required extensions
-                    let extensions = instance
-                        .enumerate_device_extension_properties(*physical_device)
-                        .unwrap();
-                    let extensions_names: HashSet<&CStr> = extensions
-                        .iter()
-                        .map(|v| CStr::from_ptr(v.extension_name.as_ptr()))
-                        .collect();
-                    if !desired_device_extensions
-                        .iter()
-                        .all(|e| extensions_names.contains(e.as_c_str()))
-                    {
-                        return None;
-                    }
+        let desired_device_extensions_cptr = Self::get_cptr_vec_from_str_slice(&device_extensions);
 
-                    // Check if the physical device supports the features requested
-                    instance.get_physical_device_features2(
-                        *physical_device,
-                        &mut available_device_features,
-                    );
-                    available_device_features.features.robust_buffer_access = 300;
-                    if !compare_vk_physical_device_features2(
-                        &available_device_features,
-                        desired_physical_device_features2,
-                    ) {
-                        return None;
-                    }
-
-                    // Check if the physical device supports the requested queues
-                    let mut queue_family_properties = Vec::<vk::QueueFamilyProperties2>::new();
-                    queue_family_properties.resize(
-                        instance.get_physical_device_queue_family_properties2_len(*physical_device),
-                        vk::QueueFamilyProperties2::default(),
-                    );
-                    instance.get_physical_device_queue_family_properties2(
-                        *physical_device,
-                        &mut queue_family_properties,
-                    );
-                    let good_family_queues =
-                        queue_family_properties
-                            .iter()
-                            .enumerate()
-                            .find(|(i, queue_family)| {
-                                let mut is_family_queue_good = desired_queues.iter().all(|q| {
-                                    queue_family
-                                        .queue_family_properties
-                                        .queue_flags
-                                        .contains(q.0)
-                                });
-                                is_family_queue_good = is_family_queue_good
-                                    && desired_queues.len()
-                                        <= queue_family.queue_family_properties.queue_count
-                                            as usize;
-
-                                if surface != vk::SurfaceKHR::null() {
-                                    is_family_queue_good = is_family_queue_good
-                                        && surface_fn
-                                            .as_ref()
-                                            .unwrap()
-                                            .get_physical_device_surface_support(
-                                                *physical_device,
-                                                *i as u32,
-                                                surface,
-                                            )
-                                            .unwrap();
-                                }
-                                is_family_queue_good
-                            });
-
-                    if let Some(selected_family_queue) = good_family_queues {
-                        return Some((*physical_device, selected_family_queue.0 as u32));
-                    }
-                    None
-                })
-                .collect::<Vec<(vk::PhysicalDevice, u32)>>();
-            destroy_vk_physical_device_features2(&mut available_device_features);
-        }
-
+        let good_devices = Self::filter_good_physical_devices(
+            &instance,
+            desired_physical_device_features2,
+            &desired_device_extensions_cptr.1,
+            desired_queues,
+            surface_fn.as_ref(),
+            surface,
+        );
         if good_devices.len() > 1 {
             println!("More than one device available selecting the first");
         }
@@ -302,13 +198,9 @@ impl BaseVk {
                 .queue_family_index(selected_device.1)
                 .queue_priorities(&queue_priorities)
                 .build();
-            let device_extensions_ptrs = desired_device_extensions
-                .iter()
-                .map(|s| s.as_ptr())
-                .collect::<Vec<_>>();
             let mut device_create_info = vk::DeviceCreateInfo::builder()
                 .queue_create_infos(std::slice::from_ref(&queues_create_info))
-                .enabled_extension_names(&device_extensions_ptrs)
+                .enabled_extension_names(&desired_device_extensions_cptr.0)
                 .enabled_features(&desired_physical_device_features2.features);
             device_create_info.p_next = desired_physical_device_features2.p_next;
 
@@ -317,15 +209,14 @@ impl BaseVk {
                 .expect("Error creating device");
         }
 
-        let mut swapchain_fn = None;
-        if window_handle.is_some() {
-            swapchain_fn = Some(khr::Swapchain::new(&instance, &device));
-        }
+        let mut swapchain_fn = match window_handle.is_some() {
+            true => Some(khr::Swapchain::new(&instance, &device)),
+            false => None,
+        };
 
-        let mut queues = Vec::new();
-        for i in 0..desired_queues.len() as u32 {
-            queues.push(unsafe { device.get_device_queue(selected_device.1, i) });
-        }
+        let queues = (0..desired_queues.len() as u32)
+            .map(|i| unsafe { device.get_device_queue(selected_device.1, i) })
+            .collect::<Vec<_>>();
 
         let allocator =
             gpu_allocator::vulkan::Allocator::new(&gpu_allocator::vulkan::AllocatorCreateDesc {
@@ -611,6 +502,139 @@ impl BaseVk {
         semaphores
             .iter()
             .for_each(|s| unsafe { self.device.destroy_semaphore(*s, None) });
+    }
+
+    fn create_instance(
+        entry_fn: &ash::Entry,
+        application_name: &str,
+        desired_instance_extensions: &[&str],
+        desired_layer_names: &[&str],
+    ) -> ash::Instance {
+        let application_name = CString::new(application_name).unwrap();
+        let application_info = vk::ApplicationInfo::builder()
+            .application_name(application_name.as_c_str())
+            .application_version(vk::make_api_version(0, 0, 1, 0))
+            .engine_name(CStr::from_bytes_with_nul(b"TheVulkanTemple\0").unwrap())
+            .engine_version(vk::make_api_version(0, 0, 1, 0))
+            .api_version(vk::API_VERSION_1_1);
+
+        let cstr_layer_names = Self::get_cptr_vec_from_str_slice(desired_layer_names);
+        let cstr_extension_names = Self::get_cptr_vec_from_str_slice(desired_instance_extensions);
+        let instance_create_info = vk::InstanceCreateInfo::builder()
+            .application_info(&application_info)
+            .enabled_layer_names(&cstr_layer_names.0)
+            .enabled_extension_names(&cstr_extension_names.0);
+
+        unsafe {
+            entry_fn
+                .create_instance(&instance_create_info, None)
+                .expect("Could not create VkInstance")
+        }
+    }
+
+    fn filter_good_physical_devices(
+        instance: &ash::Instance,
+        desired_physical_device_features2: &vk::PhysicalDeviceFeatures2,
+        desired_device_extensions: &[CString],
+        desired_queues: &[(vk::QueueFlags, f32)],
+        surface_fn: Option<&khr::Surface>,
+        surface: vk::SurfaceKHR,
+    ) -> Vec<(vk::PhysicalDevice, u32)> {
+        let mut available_device_features = unsafe {
+            clone_vk_physical_device_features2_structure(desired_physical_device_features2)
+        };
+
+        let good_devices;
+        unsafe {
+            good_devices = instance
+                .enumerate_physical_devices()
+                .unwrap()
+                .iter()
+                .filter_map(|physical_device| {
+                    // Check if the physical device supports the required extensions
+                    let extensions = instance
+                        .enumerate_device_extension_properties(*physical_device)
+                        .unwrap();
+                    let extensions_names: HashSet<&CStr> = extensions
+                        .iter()
+                        .map(|v| CStr::from_ptr(v.extension_name.as_ptr()))
+                        .collect();
+                    if !desired_device_extensions
+                        .iter()
+                        .all(|e| extensions_names.contains(e.as_c_str()))
+                    {
+                        return None;
+                    }
+
+                    // Check if the physical device supports the features requested
+                    instance.get_physical_device_features2(
+                        *physical_device,
+                        &mut available_device_features,
+                    );
+                    if !compare_vk_physical_device_features2(
+                        &available_device_features,
+                        desired_physical_device_features2,
+                    ) {
+                        return None;
+                    }
+
+                    // Check if the physical device supports the requested queues
+                    let mut queue_family_properties = Vec::<vk::QueueFamilyProperties2>::new();
+                    queue_family_properties.resize(
+                        instance.get_physical_device_queue_family_properties2_len(*physical_device),
+                        vk::QueueFamilyProperties2::default(),
+                    );
+                    instance.get_physical_device_queue_family_properties2(
+                        *physical_device,
+                        &mut queue_family_properties,
+                    );
+                    let good_family_queues =
+                        queue_family_properties
+                            .iter()
+                            .enumerate()
+                            .find(|(i, queue_family)| {
+                                let mut is_family_queue_good = desired_queues.iter().all(|q| {
+                                    queue_family
+                                        .queue_family_properties
+                                        .queue_flags
+                                        .contains(q.0)
+                                });
+                                is_family_queue_good &= desired_queues.len()
+                                    <= queue_family.queue_family_properties.queue_count as usize;
+
+                                if surface != vk::SurfaceKHR::null() {
+                                    is_family_queue_good &= surface_fn
+                                        .as_ref()
+                                        .expect("surface_fn is None")
+                                        .get_physical_device_surface_support(
+                                            *physical_device,
+                                            *i as u32,
+                                            surface,
+                                        )
+                                        .unwrap();
+                                }
+                                is_family_queue_good
+                            });
+
+                    if let Some(selected_family_queue) = good_family_queues {
+                        return Some((*physical_device, selected_family_queue.0 as u32));
+                    }
+                    None
+                })
+                .collect::<Vec<(vk::PhysicalDevice, u32)>>();
+            destroy_vk_physical_device_features2(&mut available_device_features);
+        }
+        good_devices
+    }
+
+    fn get_cptr_vec_from_str_slice(input: &[&str]) -> (Vec<*const c_char>, Vec<CString>) {
+        let input_cstr_vec: Vec<CString> =
+            input.iter().map(|s| CString::new(*s).unwrap()).collect();
+        let input_cptr_vec = input_cstr_vec
+            .iter()
+            .map(|s| s.as_ptr())
+            .collect::<Vec<_>>();
+        (input_cptr_vec, input_cstr_vec)
     }
 }
 
