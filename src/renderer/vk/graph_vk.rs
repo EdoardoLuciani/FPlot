@@ -63,7 +63,8 @@ impl GraphVk {
             },
         );
         let sync2 = khr::Synchronization2::new(&base_vk.instance, &base_vk.device);
-        let buffers = Self::create_curve_vertex_buffers(&mut base_vk);
+        let [host_curve_buffer, device_curve_buffer] =
+            Self::create_curve_vertex_buffers(&mut base_vk);
 
         let buffer_create_info = vk::BufferCreateInfo::builder()
             .size(std::mem::size_of::<nalgebra::Matrix4<f32>>() as u64)
@@ -107,8 +108,8 @@ impl GraphVk {
         GraphVk {
             bvk: base_vk,
             sync2,
-            host_curve_buffer: buffers[0].clone(),
-            device_curve_buffer: buffers[1].clone(),
+            host_curve_buffer,
+            device_curve_buffer,
             transform_uniform_buffer,
             frames_data,
             renderpass,
@@ -153,12 +154,16 @@ impl GraphVk {
         if Self::get_required_vertex_buffer_size(&self.bvk)
             > self.host_curve_buffer.allocation.size() as usize
         {
-            self.bvk.destroy_buffer(&self.host_curve_buffer);
-            self.bvk.destroy_buffer(&self.device_curve_buffer);
-
-            let v = Self::create_curve_vertex_buffers(&mut self.bvk);
-            self.host_curve_buffer = v[0].clone();
-            self.device_curve_buffer = v[1].clone();
+            let [new_host_curve_buffer, new_device_curve_buffer] =
+                Self::create_curve_vertex_buffers(&mut self.bvk);
+            self.bvk.destroy_buffer(std::mem::replace(
+                &mut self.host_curve_buffer,
+                new_host_curve_buffer,
+            ));
+            self.bvk.destroy_buffer(std::mem::replace(
+                &mut self.device_curve_buffer,
+                new_device_curve_buffer,
+            ));
         }
     }
 
@@ -217,7 +222,7 @@ impl GraphVk {
                 .mapped_ptr()
                 .unwrap()
                 .as_ptr() as *mut f32,
-                transform.len(),
+            transform.len(),
         );
         unsafe {
             (*dst_ptr).copy_from_slice(transform.data.as_slice());
@@ -717,9 +722,18 @@ impl Drop for GraphVk {
                 .destroy_cmd_pool_and_buffers(&frame_data.main_command);
         });
 
-        self.bvk.destroy_buffer(&self.host_curve_buffer);
-        self.bvk.destroy_buffer(&self.device_curve_buffer);
-        self.bvk.destroy_buffer(&self.transform_uniform_buffer);
+        self.bvk
+            .destroy_buffer(std::mem::replace(&mut self.host_curve_buffer, unsafe {
+                std::mem::zeroed()
+            }));
+        self.bvk
+            .destroy_buffer(std::mem::replace(&mut self.device_curve_buffer, unsafe {
+                std::mem::zeroed()
+            }));
+        self.bvk.destroy_buffer(std::mem::replace(
+            &mut self.transform_uniform_buffer,
+            unsafe { std::mem::zeroed() },
+        ));
 
         unsafe { self.bvk.device.destroy_framebuffer(self.framebuffer, None) };
         unsafe {

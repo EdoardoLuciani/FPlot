@@ -30,25 +30,21 @@ pub struct BaseVk {
     debug_utils_messenger: vk::DebugUtilsMessengerEXT,
 }
 
-#[derive(Clone)]
 pub struct BufferAllocation {
     pub buffer: vk::Buffer,
     pub allocation: vkalloc::Allocation,
 }
 
-#[derive(Clone)]
 pub struct ImageAllocation {
     pub image: vk::Image,
     pub allocation: vkalloc::Allocation,
 }
 
-#[derive(Clone)]
 pub struct CommandRecordInfo {
     pub pool: vk::CommandPool,
     pub buffers: Vec<vk::CommandBuffer>,
 }
 
-#[derive(Clone)]
 pub struct DescriptorInfo {
     pub pool: vk::DescriptorPool,
     pub buffers: Vec<vk::DescriptorSet>,
@@ -422,8 +418,8 @@ impl BaseVk {
         BufferAllocation { buffer, allocation }
     }
 
-    pub fn destroy_buffer(&mut self, buffer: &BufferAllocation) {
-        self.allocator.free(buffer.allocation.clone()).unwrap();
+    pub fn destroy_buffer(&mut self, buffer: BufferAllocation) {
+        self.allocator.free(buffer.allocation).unwrap();
         unsafe { self.device.destroy_buffer(buffer.buffer, None) };
     }
 
